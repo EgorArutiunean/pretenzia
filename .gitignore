@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+storage/runs/
+storage/temp/
+storage/input/
+storage/output/
+storage/registry/
+*.zip
+ОНВ*.xlsx
+Справочник.xlsx
