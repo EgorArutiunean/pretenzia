@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -50,6 +51,22 @@ class ClaimRow:
     def parking_place_number(self) -> str:
         digits = re.sub(r"\D+", "", self.account_number)
         return digits[-4:] if len(digits) >= 4 else digits
+
+    @property
+    def object_address(self) -> str:
+        return re.sub(
+            r",?\s*машиноместо\s*№\s*\d+\s*$",
+            "",
+            self.address,
+            flags=re.IGNORECASE,
+        ).strip()
+
+
+@dataclass(frozen=True)
+class ClaimsGenerationResult:
+    zip_path: str
+    documents_count: int
+    total_amount: Decimal
 
 
 def parse_money(value: Any) -> Decimal:
@@ -196,6 +213,7 @@ def build_replacements(row: ClaimRow, claim_date: str, payment_deadline: str) ->
             "debt_amount": format_money(row.debt_amount),
             "debt_amount_words": money_to_words(row.debt_amount),
             "parking_place_number": row.parking_place_number,
+            "object_address": row.object_address,
             "claim_date": claim_date,
             "payment_deadline": payment_deadline,
         }
@@ -207,13 +225,13 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def generate_claims_zip(
+def generate_claims_zip_result(
     registry_path: str,
     template_path: str,
     output_zip_path: str,
     claim_date: str,
     payment_deadline: str,
-) -> str:
+) -> ClaimsGenerationResult:
     registry = Path(registry_path)
     template = Path(template_path)
     output_zip = Path(output_zip_path)
@@ -222,6 +240,9 @@ def generate_claims_zip(
         raise FileNotFoundError(f"Word-шаблон претензии не найден: {template}")
 
     rows = read_registry(registry)
+    if not rows:
+        raise ValueError("В реестре нет строк с положительной суммой долга для генерации претензий.")
+
     temp_root = _project_root() / "storage" / "temp"
     temp_root.mkdir(parents=True, exist_ok=True)
     temp_dir = temp_root / f"claims_{uuid.uuid4().hex}"
@@ -251,7 +272,27 @@ def generate_claims_zip(
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return str(output_zip)
+    return ClaimsGenerationResult(
+        zip_path=str(output_zip),
+        documents_count=len(rows),
+        total_amount=sum((row.debt_amount for row in rows), Decimal("0.00")).quantize(Decimal("0.01")),
+    )
+
+
+def generate_claims_zip(
+    registry_path: str,
+    template_path: str,
+    output_zip_path: str,
+    claim_date: str,
+    payment_deadline: str,
+) -> str:
+    return generate_claims_zip_result(
+        registry_path=registry_path,
+        template_path=template_path,
+        output_zip_path=output_zip_path,
+        claim_date=claim_date,
+        payment_deadline=payment_deadline,
+    ).zip_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -269,16 +310,21 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    zip_path = generate_claims_zip(
-        registry_path=args.registry,
-        template_path=args.template,
-        output_zip_path=args.out,
-        claim_date=args.claim_date,
-        payment_deadline=args.payment_deadline,
-    )
-    count = len(read_registry(args.registry))
-    print(f"Создано претензий: {count}")
-    print(f"Архив: {zip_path}")
+    try:
+        result = generate_claims_zip_result(
+            registry_path=args.registry,
+            template_path=args.template,
+            output_zip_path=args.out,
+            claim_date=args.claim_date,
+            payment_deadline=args.payment_deadline,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Ошибка: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    print(f"Создано претензий: {result.documents_count}")
+    print(f"Итоговая сумма долга: {format_money(result.total_amount)}")
+    print(f"Архив: {result.zip_path}")
 
 
 if __name__ == "__main__":
