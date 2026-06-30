@@ -1,29 +1,18 @@
 from __future__ import annotations
 
-import os
 from datetime import date, timedelta
 from pathlib import Path
 
-try:
-    from dotenv import load_dotenv
-except ImportError:  # pragma: no cover - dotenv is optional for CLI-only use
-    load_dotenv = None
-
+from app.config import PROJECT_ROOT, load_settings
 from app.modules.claims.generate_claims_from_registry import generate_claims_zip
 from app.modules.excel_normalizer.build_debt_registry_template import build_registry
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CLAIM_TEMPLATE = PROJECT_ROOT / "app" / "modules" / "claims" / "claim_template.docx"
 
 
 class CourtOrdersNotImplementedError(NotImplementedError):
     """Raised while the court orders module is only an architectural stub."""
-
-
-def _load_env() -> None:
-    if load_dotenv is not None:
-        load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -45,18 +34,13 @@ def run_excel_to_registry(input_excel_path: str, run_dir: str) -> str:
 
     Calls the excel_normalizer module directly and returns the registry path.
     """
-    _load_env()
+    settings = load_settings()
     run_path = Path(run_dir)
     registry_dir = _ensure_dir(run_path / "registry")
     output_path = registry_dir / "registry.xlsx"
 
-    object_addresses_path = os.getenv("OBJECT_ADDRESSES_PATH")
-    object_addresses: Path | None = None
-    if object_addresses_path:
-        object_addresses = Path(object_addresses_path)
-        if not object_addresses.is_absolute():
-            object_addresses = PROJECT_ROOT / object_addresses
-    else:
+    object_addresses = settings.object_addresses_path
+    if object_addresses is None:
         default_object_addresses = PROJECT_ROOT / "object_addresses.xlsx"
         if default_object_addresses.exists():
             object_addresses = default_object_addresses
@@ -75,7 +59,7 @@ def run_registry_to_claims(registry_path: str, run_dir: str) -> str:
 
     Calls the claims module directly and returns the ZIP path.
     """
-    _load_env()
+    settings = load_settings()
     run_path = Path(run_dir)
     output_dir = _ensure_dir(run_path / "output")
     output_zip_path = output_dir / "claims.zip"
@@ -84,8 +68,8 @@ def run_registry_to_claims(registry_path: str, run_dir: str) -> str:
         registry_path=registry_path,
         template_path=str(DEFAULT_CLAIM_TEMPLATE),
         output_zip_path=str(output_zip_path),
-        claim_date=os.getenv("CLAIM_DATE", _default_claim_date()),
-        payment_deadline=os.getenv("PAYMENT_DEADLINE", _default_payment_deadline()),
+        claim_date=settings.claim_date or _default_claim_date(),
+        payment_deadline=settings.payment_deadline or _default_payment_deadline(),
     )
     return str(output_zip_path)
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -13,6 +14,7 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 from openpyxl import load_workbook
 
 from app.bot.keyboards import main_menu_keyboard
+from app.config import load_settings
 from app.pipeline import (
     CourtOrdersNotImplementedError,
     PROJECT_ROOT,
@@ -24,6 +26,7 @@ from app.pipeline import (
 
 router = Router()
 logger = logging.getLogger(__name__)
+ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 
 
 class DocumentFlow(StatesGroup):
@@ -50,24 +53,13 @@ HELP_TEXT = (
 
 
 def _admin_ids() -> set[int]:
-    raw = os.getenv("ADMIN_IDS", "")
-    result: set[int] = set()
-    for item in raw.split(","):
-        item = item.strip()
-        if item:
-            try:
-                result.add(int(item))
-            except ValueError:
-                logger.warning("Invalid ADMIN_IDS item: %s", item)
-    return result
+    return load_settings().admin_ids
 
 
 def _is_allowed(user_id: int | None) -> bool:
     if user_id is None:
         return False
     admin_ids = _admin_ids()
-    if not admin_ids:
-        return True
     return user_id in admin_ids
 
 
@@ -81,8 +73,22 @@ async def _deny_if_needed(message: Message) -> bool:
 async def _deny_callback_if_needed(callback: CallbackQuery) -> bool:
     if _is_allowed(callback.from_user.id if callback.from_user else None):
         return False
-    await callback.answer("Доступ запрещён.", show_alert=True)
+    await _answer_callback_safely(callback, "Доступ запрещён.", show_alert=True)
     return True
+
+
+async def _answer_callback_safely(
+    callback: CallbackQuery,
+    text: str | None = None,
+    *,
+    show_alert: bool = False,
+) -> None:
+    try:
+        await callback.answer(text=text, show_alert=show_alert)
+    except TelegramBadRequest as exc:
+        if "query is too old" not in str(exc).lower():
+            raise
+        logger.info("Skipping expired callback query id=%s", callback.id)
 
 
 def _create_run_dir(user_id: int) -> Path:
@@ -96,6 +102,18 @@ def _create_run_dir(user_id: int) -> Path:
 def _source_path(run_dir: Path, original_file_name: str | None) -> Path:
     suffix = Path(original_file_name or "").suffix or ".xlsx"
     return run_dir / "input" / f"source{suffix}"
+
+
+def _validate_document(document) -> str | None:
+    suffix = Path(document.file_name or "").suffix.lower()
+    if suffix not in ALLOWED_EXTENSIONS:
+        return "Загрузите файл Excel в формате .xlsx или .xlsm."
+
+    max_upload_mb = load_settings().max_upload_mb
+    if document.file_size and document.file_size > max_upload_mb * 1024 * 1024:
+        return f"Файл слишком большой. Максимальный размер: {max_upload_mb} МБ."
+
+    return None
 
 
 def _registry_error_count(registry_path: str) -> int:
@@ -126,7 +144,7 @@ async def show_help(callback: CallbackQuery) -> None:
     if await _deny_callback_if_needed(callback):
         return
     await callback.message.answer(HELP_TEXT, reply_markup=main_menu_keyboard())
-    await callback.answer()
+    await _answer_callback_safely(callback)
 
 
 @router.callback_query(F.data == "action:court_orders")
@@ -139,7 +157,7 @@ async def court_orders_stub(callback: CallbackQuery, state: FSMContext) -> None:
         "Источником данных будет registry.xlsx.",
         reply_markup=main_menu_keyboard(),
     )
-    await callback.answer()
+    await _answer_callback_safely(callback)
 
 
 @router.callback_query(F.data.in_({"action:normalize", "action:claims"}))
@@ -151,7 +169,7 @@ async def choose_action(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(action=action)
     await state.set_state(DocumentFlow.waiting_for_file)
     await callback.message.answer(ACTION_PROMPTS[action])
-    await callback.answer()
+    await _answer_callback_safely(callback)
 
 
 @router.message(DocumentFlow.waiting_for_file, F.document)
@@ -167,6 +185,12 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
         return
 
     document = message.document
+    validation_error = _validate_document(document)
+    if validation_error:
+        await message.answer(validation_error, reply_markup=main_menu_keyboard())
+        await state.clear()
+        return
+
     run_dir = _create_run_dir(message.from_user.id)
     input_path = _source_path(run_dir, document.file_name)
 
@@ -175,8 +199,8 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
 
     try:
         if action == "normalize":
-            result_path = run_excel_to_registry(str(input_path), str(run_dir))
-            error_count = _registry_error_count(result_path)
+            result_path = await asyncio.to_thread(run_excel_to_registry, str(input_path), str(run_dir))
+            error_count = await asyncio.to_thread(_registry_error_count, result_path)
             caption = "Готово: registry.xlsx"
             if error_count:
                 caption += f"\nЕсть строки на листе «Ошибки»: {error_count}."
@@ -185,7 +209,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
                 caption=caption,
             )
         elif action == "claims":
-            result_path = run_registry_to_claims(str(input_path), str(run_dir))
+            result_path = await asyncio.to_thread(run_registry_to_claims, str(input_path), str(run_dir))
             await message.answer_document(
                 FSInputFile(result_path),
                 caption="Готово: claims.zip",
@@ -197,7 +221,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
     except Exception as exc:
         logger.exception("Processing failed. run_dir=%s action=%s", run_dir, action)
         await message.answer(
-            f"Ошибка обработки файла: {exc}\nПапка запуска: {run_dir}",
+            "Ошибка обработки файла. Проверьте формат и попробуйте еще раз.",
             reply_markup=main_menu_keyboard(),
         )
         return
