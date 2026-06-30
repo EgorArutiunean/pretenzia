@@ -20,6 +20,8 @@ copy .env.example .env
 - `ADMIN_IDS` — разрешенные Telegram user id через запятую. Бот не запускается без этого списка.
 - `OBJECT_ADDRESSES_PATH` — путь к справочнику адресов объектов для нормализации ОНВ.
 
+Не задавайте `CLAIM_DATE` и `PAYMENT_DEADLINE` в production, если даты должны рассчитываться автоматически. По умолчанию дата претензии — текущий день, срок оплаты — текущий день + 30 дней. Эти переменные нужны только для ручного переопределения дат.
+
 Для production оставляйте `TELEGRAM_SSL_VERIFY=true`.
 
 ## Проверка перед деплоем
@@ -74,7 +76,7 @@ python -m app.main registry_template.xlsx --out storage/output/claims.zip
 python -m app.modules.claims.generate_claims_from_registry registry_template.xlsx --out storage/output/claims.zip
 ```
 
-Дополнительные параметры:
+Дополнительные параметры для ручного запуска с фиксированными датами:
 
 ```powershell
 --template app/modules/claims/claim_template.docx
