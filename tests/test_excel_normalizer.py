@@ -7,7 +7,7 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from app.modules.excel_normalizer.build_debt_registry_template import build_registry
+from app.modules.excel_normalizer.build_debt_registry_template import build_registry, load_object_addresses
 
 
 def _append_row(worksheet, level: int, values: list[object]) -> None:
@@ -55,6 +55,11 @@ class ExcelNormalizerTests(unittest.TestCase):
         )
         self.assertEqual(errors.max_row - 1, 1)
         self.assertIn("9999", errors.cell(2, 4).value)
+
+    def test_load_object_addresses_rejects_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "должен быть файлом"):
+                load_object_addresses(temp_dir)
 
 
 if __name__ == "__main__":

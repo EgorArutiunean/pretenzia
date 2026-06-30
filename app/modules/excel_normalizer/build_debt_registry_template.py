@@ -143,6 +143,8 @@ def load_object_addresses(path):
     source = Path(path)
     if not source.exists():
         raise FileNotFoundError(f"Справочник адресов объектов не найден: {source}")
+    if not source.is_file():
+        raise ValueError(f"Справочник адресов объектов должен быть файлом .xlsx или .json: {source}")
 
     if source.suffix.lower() == ".json":
         with source.open("r", encoding="utf-8") as file:
