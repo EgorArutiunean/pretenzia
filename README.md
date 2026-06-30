@@ -42,6 +42,12 @@ docker compose logs -f bot
 
 В Docker build context не попадают `.env`, ОНВ, справочники, `storage/` и ZIP-архивы.
 
+## Autodeploy
+
+Автодеплой настроен через GitHub Actions: после успешного `CI` на ветке `master` workflow `Deploy` подключается к серверу по SSH и перезапускает `docker compose`.
+
+Инструкция по подготовке сервера и GitHub Secrets: [docs/deploy.md](docs/deploy.md).
+
 ## Очистка персональных данных
 
 По умолчанию команда показывает, какие пользовательские запуски старше 14 дней будут удалены:

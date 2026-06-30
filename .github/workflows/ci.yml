@@ -41,5 +41,8 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -v
 
+      - name: Run CLI smoke check
+        run: python -m app.main registry_template.xlsx --out storage/output/claims.zip
+
       - name: Build Docker image
         run: docker build -t pretenzia:ci .
