@@ -7,7 +7,7 @@ from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
@@ -15,6 +15,7 @@ from openpyxl import load_workbook
 
 from app.bot.keyboards import main_menu_keyboard
 from app.config import load_settings
+from app.modules.excel_normalizer.build_debt_registry_template import load_object_addresses
 from app.pipeline import (
     CourtOrdersNotImplementedError,
     PROJECT_ROOT,
@@ -27,6 +28,7 @@ from app.pipeline import (
 router = Router()
 logger = logging.getLogger(__name__)
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
+DEFAULT_OBJECT_ADDRESSES_PATH = PROJECT_ROOT / "storage" / "object_addresses.xlsx"
 
 
 class DocumentFlow(StatesGroup):
@@ -39,6 +41,7 @@ ACTION_PROMPTS = {
         "Загрузите готовый Excel-реестр с колонками: Лицевой счет, ФИО, "
         "Адрес, Период задолженности, Сумма долга."
     ),
+    "dictionary": "Загрузите Excel-справочник адресов объектов.",
 }
 
 
@@ -48,7 +51,8 @@ HELP_TEXT = (
     "1. ОНВ из 1С -> registry.xlsx. Для адресов используется справочник из OBJECT_ADDRESSES_PATH.\n"
     "2. registry.xlsx -> claims.zip. Обязательные колонки: Лицевой счет, ФИО, Адрес, "
     "Период задолженности, Сумма долга.\n"
-    "3. Судебные заявления будут генерироваться из registry.xlsx, не из архива претензий."
+    "3. Справочник адресов объектов можно обновить командой /dictionary.\n"
+    "4. Судебные заявления будут генерироваться из registry.xlsx, не из архива претензий."
 )
 
 
@@ -104,6 +108,11 @@ def _source_path(run_dir: Path, original_file_name: str | None) -> Path:
     return run_dir / "input" / f"source{suffix}"
 
 
+def _object_addresses_path() -> Path:
+    settings = load_settings()
+    return settings.object_addresses_path or DEFAULT_OBJECT_ADDRESSES_PATH
+
+
 def _validate_document(document) -> str | None:
     suffix = Path(document.file_name or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -125,6 +134,14 @@ def _registry_error_count(registry_path: str) -> int:
     return max(worksheet.max_row - 1, 0)
 
 
+def _install_object_addresses(upload_path: Path) -> Path:
+    target_path = _object_addresses_path()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    load_object_addresses(upload_path)
+    upload_path.replace(target_path)
+    return target_path
+
+
 async def _send_menu(message: Message) -> None:
     await message.answer("Выберите действие:", reply_markup=main_menu_keyboard())
 
@@ -137,6 +154,15 @@ async def start(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await _send_menu(message)
+
+
+@router.message(Command("dictionary"))
+async def upload_dictionary(message: Message, state: FSMContext) -> None:
+    if await _deny_if_needed(message):
+        return
+    await state.update_data(action="dictionary")
+    await state.set_state(DocumentFlow.waiting_for_file)
+    await message.answer(ACTION_PROMPTS["dictionary"])
 
 
 @router.callback_query(F.data == "action:help")
@@ -160,7 +186,7 @@ async def court_orders_stub(callback: CallbackQuery, state: FSMContext) -> None:
     await _answer_callback_safely(callback)
 
 
-@router.callback_query(F.data.in_({"action:normalize", "action:claims"}))
+@router.callback_query(F.data.in_({"action:normalize", "action:claims", "action:dictionary"}))
 async def choose_action(callback: CallbackQuery, state: FSMContext) -> None:
     if await _deny_callback_if_needed(callback):
         return
@@ -179,7 +205,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
 
     data = await state.get_data()
     action = data.get("action")
-    if action not in {"normalize", "claims"}:
+    if action not in {"normalize", "claims", "dictionary"}:
         await state.clear()
         await message.answer("Выберите действие заново.", reply_markup=main_menu_keyboard())
         return
@@ -198,7 +224,13 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
     await bot.download(document, destination=input_path)
 
     try:
-        if action == "normalize":
+        if action == "dictionary":
+            target_path = await asyncio.to_thread(_install_object_addresses, input_path)
+            await message.answer(
+                f"Готово: справочник адресов обновлен.\nПуть: {target_path}",
+                reply_markup=main_menu_keyboard(),
+            )
+        elif action == "normalize":
             result_path = await asyncio.to_thread(run_excel_to_registry, str(input_path), str(run_dir))
             error_count = await asyncio.to_thread(_registry_error_count, result_path)
             caption = "Готово: registry.xlsx"

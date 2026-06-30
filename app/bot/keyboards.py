@@ -20,6 +20,12 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="📍 Обновить справочник адресов",
+                    callback_data="action:dictionary",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="⚖️ Создать заявления в суд",
                     callback_data="action:court_orders",
                 )

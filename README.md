@@ -44,6 +44,8 @@ docker compose logs -f bot
 
 В Docker build context не попадают `.env`, ОНВ, справочники, `storage/` и ZIP-архивы.
 
+Справочник адресов также можно обновить через Telegram-бота: команда `/dictionary` или кнопка `Обновить справочник адресов`. Загруженный файл сохраняется в `OBJECT_ADDRESSES_PATH`.
+
 ## Autodeploy
 
 Автодеплой настроен через GitHub Actions: после успешного `CI` на ветке `master` workflow `Deploy` подключается к серверу по SSH и перезапускает `docker compose`.
