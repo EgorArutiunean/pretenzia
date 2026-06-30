@@ -42,7 +42,7 @@ class Settings:
 
 
 def load_settings(*, require_bot: bool = False) -> Settings:
-    load_dotenv(PROJECT_ROOT / ".env", override=True)
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
 
     settings = Settings(
         bot_token=os.getenv("BOT_TOKEN") or None,

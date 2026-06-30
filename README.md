@@ -22,6 +22,14 @@ copy .env.example .env
 
 Для production оставляйте `TELEGRAM_SSL_VERIFY=true`.
 
+## Проверка перед деплоем
+
+```powershell
+python -m unittest discover -v
+python -m app.modules.excel_normalizer.build_debt_registry_template "ОНВ 1297.xlsx" --object-addresses "Справочник.xlsx" --out storage/registry/registry.xlsx
+python -m app.main storage/registry/registry.xlsx --out storage/output/claims.zip
+```
+
 Запуск:
 
 ```powershell
