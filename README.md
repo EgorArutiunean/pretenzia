@@ -42,6 +42,20 @@ docker compose logs -f bot
 
 В Docker build context не попадают `.env`, ОНВ, справочники, `storage/` и ZIP-архивы.
 
+## Очистка персональных данных
+
+По умолчанию команда показывает, какие пользовательские запуски старше 14 дней будут удалены:
+
+```powershell
+python -m app.maintenance.cleanup_storage --older-than-days 14
+```
+
+Фактическое удаление:
+
+```powershell
+python -m app.maintenance.cleanup_storage --older-than-days 14 --apply
+```
+
 Запуск:
 
 ```powershell
