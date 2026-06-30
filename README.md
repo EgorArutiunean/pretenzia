@@ -30,6 +30,18 @@ python -m app.modules.excel_normalizer.build_debt_registry_template "ОНВ 1297
 python -m app.main storage/registry/registry.xlsx --out storage/output/claims.zip
 ```
 
+## Docker deploy
+
+Перед запуском заполните `.env` и положите справочник адресов рядом с `docker-compose.yml` как `Справочник.xlsx`.
+
+```powershell
+docker compose build
+docker compose up -d
+docker compose logs -f bot
+```
+
+В Docker build context не попадают `.env`, ОНВ, справочники, `storage/` и ZIP-архивы.
+
 Запуск:
 
 ```powershell

@@ -1,0 +1,13 @@
+.git
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+
+storage/
+*.zip
+ОНВ*.xlsx
+Справочник.xlsx
+
+*.log
+*.tmp
