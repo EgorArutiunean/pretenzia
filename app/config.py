@@ -59,9 +59,5 @@ def load_settings(*, require_bot: bool = False) -> Settings:
             raise RuntimeError("BOT_TOKEN is not set in .env")
         if not settings.admin_ids:
             raise RuntimeError("ADMIN_IDS must contain at least one Telegram user id for safe bot startup")
-        if settings.object_addresses_path is not None and not settings.object_addresses_path.exists():
-            raise RuntimeError(f"OBJECT_ADDRESSES_PATH does not exist: {settings.object_addresses_path}")
-        if settings.object_addresses_path is not None and not settings.object_addresses_path.is_file():
-            raise RuntimeError(f"OBJECT_ADDRESSES_PATH must point to an .xlsx or .json file: {settings.object_addresses_path}")
 
     return settings

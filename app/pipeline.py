@@ -44,6 +44,10 @@ def run_excel_to_registry(input_excel_path: str, run_dir: str) -> str:
         default_object_addresses = PROJECT_ROOT / "object_addresses.xlsx"
         if default_object_addresses.exists():
             object_addresses = default_object_addresses
+    elif not object_addresses.exists():
+        raise FileNotFoundError(f"OBJECT_ADDRESSES_PATH does not exist: {object_addresses}")
+    elif not object_addresses.is_file():
+        raise ValueError(f"OBJECT_ADDRESSES_PATH must point to an .xlsx or .json file: {object_addresses}")
 
     build_registry(
         input_path=input_excel_path,
