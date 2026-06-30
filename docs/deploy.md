@@ -25,7 +25,8 @@ cp .env.example .env
 nano .env
 ```
 
-Put the address dictionary beside `docker-compose.yml` as `Справочник.xlsx`, or update `OBJECT_ADDRESSES_PATH` and the compose volume consistently.
+Put the address dictionary into persistent storage as `storage/object_addresses.xlsx`.
+For Docker/Coolify set `OBJECT_ADDRESSES_PATH=/app/storage/object_addresses.xlsx`.
 
 Run once manually to verify the server:
 

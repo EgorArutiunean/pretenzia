@@ -18,7 +18,7 @@ copy .env.example .env
 
 - `BOT_TOKEN` — токен Telegram-бота.
 - `ADMIN_IDS` — разрешенные Telegram user id через запятую. Бот не запускается без этого списка.
-- `OBJECT_ADDRESSES_PATH` — путь к справочнику адресов объектов для нормализации ОНВ.
+- `OBJECT_ADDRESSES_PATH` — путь к справочнику адресов объектов для нормализации ОНВ. Для Docker/Coolify используйте `/app/storage/object_addresses.xlsx`.
 
 Не задавайте `CLAIM_DATE` и `PAYMENT_DEADLINE` в production, если даты должны рассчитываться автоматически. По умолчанию дата претензии — текущий день, срок оплаты — текущий день + 30 дней. Эти переменные нужны только для ручного переопределения дат.
 
@@ -34,7 +34,7 @@ python -m app.main storage/registry/registry.xlsx --out storage/output/claims.zi
 
 ## Docker deploy
 
-Перед запуском заполните `.env` и положите справочник адресов рядом с `docker-compose.yml` как `Справочник.xlsx`.
+Перед запуском заполните `.env` и положите справочник адресов в persistent storage как `storage/object_addresses.xlsx`.
 
 ```powershell
 docker compose build

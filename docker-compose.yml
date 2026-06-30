@@ -6,4 +6,3 @@ services:
     restart: unless-stopped
     volumes:
       - ./storage:/app/storage
-      - ./Справочник.xlsx:/app/Справочник.xlsx:ro
