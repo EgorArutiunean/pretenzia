@@ -5,14 +5,13 @@ from pathlib import Path
 
 from app.config import PROJECT_ROOT, load_settings
 from app.modules.claims.generate_claims_from_registry import generate_claims_zip
+from app.modules.court_orders.generate_court_orders_from_registry import generate_court_orders_zip
 from app.modules.excel_normalizer.build_debt_registry_template import build_registry
 
 
 DEFAULT_CLAIM_TEMPLATE = PROJECT_ROOT / "app" / "modules" / "claims" / "claim_template.docx"
-
-
-class CourtOrdersNotImplementedError(NotImplementedError):
-    """Raised while the court orders module is only an architectural stub."""
+DEFAULT_COURT_ORDER_TEMPLATE = PROJECT_ROOT / "app" / "modules" / "court_orders" / "court_order_template.docx"
+DEFAULT_COURT_ORDERS_STATIC_DATA = PROJECT_ROOT / "storage" / "court_orders_static_data.xlsx"
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -82,9 +81,26 @@ def run_registry_to_court_orders(registry_path: str, run_dir: str) -> str:
     """
     registry.xlsx -> court_orders.zip.
 
-    Stub for the future court_orders module. The source remains registry.xlsx.
+    Calls the court_orders module directly and returns the ZIP path.
     """
-    raise CourtOrdersNotImplementedError(
-        "Модуль судебных заявлений будет добавлен в следующей итерации. "
-        "Источником данных будет registry.xlsx."
+    settings = load_settings()
+    run_path = Path(run_dir)
+    output_dir = _ensure_dir(run_path / "output")
+    output_zip_path = output_dir / "court_orders.zip"
+
+    static_data = settings.court_orders_static_data_path or DEFAULT_COURT_ORDERS_STATIC_DATA
+    if not static_data.exists():
+        raise FileNotFoundError(
+            f"БЗ для судебных заявлений не найдена: {static_data}. "
+            "Загрузите файл через /courtdata или задайте COURT_ORDERS_STATIC_DATA_PATH."
+        )
+    if not static_data.is_file():
+        raise ValueError(f"COURT_ORDERS_STATIC_DATA_PATH must point to an .xlsx file: {static_data}")
+
+    generate_court_orders_zip(
+        registry_path=registry_path,
+        template_path=str(DEFAULT_COURT_ORDER_TEMPLATE),
+        static_data_path=str(static_data),
+        output_zip_path=str(output_zip_path),
     )
+    return str(output_zip_path)

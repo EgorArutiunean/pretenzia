@@ -37,6 +37,7 @@ class Settings:
     claim_date: str | None
     payment_deadline: str | None
     object_addresses_path: Path | None
+    court_orders_static_data_path: Path | None
     telegram_ssl_verify: bool
     max_upload_mb: int
 
@@ -50,6 +51,7 @@ def load_settings(*, require_bot: bool = False) -> Settings:
         claim_date=os.getenv("CLAIM_DATE") or None,
         payment_deadline=os.getenv("PAYMENT_DEADLINE") or None,
         object_addresses_path=_resolve_optional_path(os.getenv("OBJECT_ADDRESSES_PATH")),
+        court_orders_static_data_path=_resolve_optional_path(os.getenv("COURT_ORDERS_STATIC_DATA_PATH")),
         telegram_ssl_verify=os.getenv("TELEGRAM_SSL_VERIFY", "true").strip().lower() not in {"0", "false", "no"},
         max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "20")),
     )

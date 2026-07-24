@@ -4,7 +4,10 @@
 
 ## MVP
 
-В текущей версии реализован только модуль `claims`: генерация Word-претензий из готового Excel-реестра и упаковка документов в ZIP.
+В текущей версии реализованы:
+
+- `claims` — генерация Word-претензий из готового Excel-реестра и упаковка документов в ZIP;
+- `court_orders` — генерация заявлений о вынесении судебного приказа из того же реестра.
 
 ## Конфигурация
 
@@ -19,6 +22,7 @@ copy .env.example .env
 - `BOT_TOKEN` — токен Telegram-бота.
 - `ADMIN_IDS` — разрешенные Telegram user id через запятую. Бот не запускается без этого списка.
 - `OBJECT_ADDRESSES_PATH` — путь к справочнику адресов объектов для нормализации ОНВ. Для Docker/Coolify используйте `/app/storage/object_addresses.xlsx`.
+- `COURT_ORDERS_STATIC_DATA_PATH` — путь к Excel-агрегатору данных для судебных заявлений. Для Docker/Coolify используйте `/app/storage/court_orders_static_data.xlsx`.
 
 Не задавайте `CLAIM_DATE` и `PAYMENT_DEADLINE` в production, если даты должны рассчитываться автоматически. По умолчанию дата претензии — текущий день, срок оплаты — текущий день + 30 дней. Эти переменные нужны только для ручного переопределения дат.
 
@@ -45,6 +49,8 @@ docker compose logs -f bot
 В Docker build context не попадают `.env`, ОНВ, справочники, `storage/` и ZIP-архивы.
 
 Справочник адресов также можно обновить через Telegram-бота: команда `/dictionary` или кнопка `Обновить справочник адресов`. Загруженный файл сохраняется в `OBJECT_ADDRESSES_PATH`.
+
+Excel-агрегатор для судебных заявлений можно обновить через Telegram-бота: команда `/courtdata` или кнопка `Обновить БЗ для суда`. Загруженный файл сохраняется в `COURT_ORDERS_STATIC_DATA_PATH`.
 
 ## Autodeploy
 
@@ -86,11 +92,23 @@ python -m app.modules.claims.generate_claims_from_registry registry_template.xls
 --payment-deadline 25.05.2026
 ```
 
+Генерация заявлений о вынесении судебного приказа:
+
+```powershell
+python -m app.main registry_template.xlsx --mode court-orders --static-data storage/court_orders_static_data.xlsx --out storage/output/court_orders.zip
+```
+
+Прямой запуск модуля:
+
+```powershell
+python -m app.modules.court_orders.generate_court_orders_from_registry registry_template.xlsx --static-data storage/court_orders_static_data.xlsx --out storage/output/court_orders.zip
+```
+
 ## Структура
 
 - `app/modules/excel_normalizer` — будущая нормализация сырого Excel-отчета из 1С.
 - `app/modules/claims` — MVP-модуль генерации претензий.
-- `app/modules/court_orders` — будущая генерация заявлений о вынесении судебного приказа.
+- `app/modules/court_orders` — генерация заявлений о вынесении судебного приказа.
 - `app/shared` — общие утилиты.
 - `storage/temp` — временные DOCX при сборке ZIP.
 - `storage/output` — итоговые архивы.

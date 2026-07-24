@@ -26,6 +26,12 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="🏛️ Обновить БЗ для суда",
+                    callback_data="action:court_data",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="⚖️ Создать заявления в суд",
                     callback_data="action:court_orders",
                 )

@@ -6,6 +6,10 @@ storage/temp/
 storage/input/
 storage/output/
 storage/registry/
+storage/*.xlsx
+storage/*.xlsm
+storage/*.json
+storage/*.base64
 *.zip
 ОНВ*.xlsx
 Справочник.xlsx

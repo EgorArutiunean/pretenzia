@@ -15,9 +15,9 @@ from openpyxl import load_workbook
 
 from app.bot.keyboards import main_menu_keyboard
 from app.config import load_settings
+from app.modules.court_orders.generate_court_orders_from_registry import load_static_data
 from app.modules.excel_normalizer.build_debt_registry_template import load_object_addresses
 from app.pipeline import (
-    CourtOrdersNotImplementedError,
     PROJECT_ROOT,
     run_excel_to_registry,
     run_registry_to_claims,
@@ -29,6 +29,7 @@ router = Router()
 logger = logging.getLogger(__name__)
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 DEFAULT_OBJECT_ADDRESSES_PATH = PROJECT_ROOT / "storage" / "object_addresses.xlsx"
+DEFAULT_COURT_ORDERS_STATIC_DATA_PATH = PROJECT_ROOT / "storage" / "court_orders_static_data.xlsx"
 
 
 class DocumentFlow(StatesGroup):
@@ -42,6 +43,11 @@ ACTION_PROMPTS = {
         "Адрес, Период задолженности, Сумма долга."
     ),
     "dictionary": "Загрузите Excel-справочник адресов объектов.",
+    "court_data": "Загрузите Excel-БЗ для судебных заявлений.",
+    "court_orders": (
+        "Загрузите готовый Excel-реестр с колонками: Лицевой счет, ФИО, "
+        "Адрес, Период задолженности, Сумма долга."
+    ),
 }
 
 
@@ -52,7 +58,8 @@ HELP_TEXT = (
     "2. registry.xlsx -> claims.zip. Обязательные колонки: Лицевой счет, ФИО, Адрес, "
     "Период задолженности, Сумма долга.\n"
     "3. Справочник адресов объектов можно обновить командой /dictionary.\n"
-    "4. Судебные заявления будут генерироваться из registry.xlsx, не из архива претензий."
+    "4. БЗ для судебных заявлений можно обновить командой /courtdata.\n"
+    "5. Судебные заявления генерируются из registry.xlsx, не из архива претензий."
 )
 
 
@@ -113,6 +120,11 @@ def _object_addresses_path() -> Path:
     return settings.object_addresses_path or DEFAULT_OBJECT_ADDRESSES_PATH
 
 
+def _court_orders_static_data_path() -> Path:
+    settings = load_settings()
+    return settings.court_orders_static_data_path or DEFAULT_COURT_ORDERS_STATIC_DATA_PATH
+
+
 def _validate_document(document) -> str | None:
     suffix = Path(document.file_name or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -142,6 +154,14 @@ def _install_object_addresses(upload_path: Path) -> Path:
     return target_path
 
 
+def _install_court_orders_static_data(upload_path: Path) -> Path:
+    target_path = _court_orders_static_data_path()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    load_static_data(upload_path)
+    upload_path.replace(target_path)
+    return target_path
+
+
 async def _send_menu(message: Message) -> None:
     await message.answer("Выберите действие:", reply_markup=main_menu_keyboard())
 
@@ -165,6 +185,15 @@ async def upload_dictionary(message: Message, state: FSMContext) -> None:
     await message.answer(ACTION_PROMPTS["dictionary"])
 
 
+@router.message(Command("courtdata"))
+async def upload_court_data(message: Message, state: FSMContext) -> None:
+    if await _deny_if_needed(message):
+        return
+    await state.update_data(action="court_data")
+    await state.set_state(DocumentFlow.waiting_for_file)
+    await message.answer(ACTION_PROMPTS["court_data"])
+
+
 @router.callback_query(F.data == "action:help")
 async def show_help(callback: CallbackQuery) -> None:
     if await _deny_callback_if_needed(callback):
@@ -173,20 +202,7 @@ async def show_help(callback: CallbackQuery) -> None:
     await _answer_callback_safely(callback)
 
 
-@router.callback_query(F.data == "action:court_orders")
-async def court_orders_stub(callback: CallbackQuery, state: FSMContext) -> None:
-    if await _deny_callback_if_needed(callback):
-        return
-    await state.clear()
-    await callback.message.answer(
-        "Модуль судебных заявлений будет добавлен в следующей итерации. "
-        "Источником данных будет registry.xlsx.",
-        reply_markup=main_menu_keyboard(),
-    )
-    await _answer_callback_safely(callback)
-
-
-@router.callback_query(F.data.in_({"action:normalize", "action:claims", "action:dictionary"}))
+@router.callback_query(F.data.in_({"action:normalize", "action:claims", "action:dictionary", "action:court_data", "action:court_orders"}))
 async def choose_action(callback: CallbackQuery, state: FSMContext) -> None:
     if await _deny_callback_if_needed(callback):
         return
@@ -205,7 +221,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
 
     data = await state.get_data()
     action = data.get("action")
-    if action not in {"normalize", "claims", "dictionary"}:
+    if action not in {"normalize", "claims", "dictionary", "court_data", "court_orders"}:
         await state.clear()
         await message.answer("Выберите действие заново.", reply_markup=main_menu_keyboard())
         return
@@ -230,6 +246,12 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
                 f"Готово: справочник адресов обновлен.\nПуть: {target_path}",
                 reply_markup=main_menu_keyboard(),
             )
+        elif action == "court_data":
+            target_path = await asyncio.to_thread(_install_court_orders_static_data, input_path)
+            await message.answer(
+                f"Готово: БЗ для судебных заявлений обновлена.\nПуть: {target_path}",
+                reply_markup=main_menu_keyboard(),
+            )
         elif action == "normalize":
             result_path = await asyncio.to_thread(run_excel_to_registry, str(input_path), str(run_dir))
             error_count = await asyncio.to_thread(_registry_error_count, result_path)
@@ -246,10 +268,12 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
                 FSInputFile(result_path),
                 caption="Готово: claims.zip",
             )
-        else:
-            run_registry_to_court_orders(str(input_path), str(run_dir))
-    except CourtOrdersNotImplementedError as exc:
-        await message.answer(str(exc), reply_markup=main_menu_keyboard())
+        elif action == "court_orders":
+            result_path = await asyncio.to_thread(run_registry_to_court_orders, str(input_path), str(run_dir))
+            await message.answer_document(
+                FSInputFile(result_path),
+                caption="Готово: court_orders.zip",
+            )
     except Exception as exc:
         logger.exception("Processing failed. run_dir=%s action=%s", run_dir, action)
         await message.answer(
