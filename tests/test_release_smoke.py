@@ -32,10 +32,19 @@ class ReleaseSmokeTests(unittest.TestCase):
 
             generated_doc = Document(str(Path(temp_dir) / names[0]))
             generated_text = "\n".join(paragraph.text for paragraph in generated_doc.paragraphs)
+            generated_footer_text = "\n".join(
+                paragraph.text
+                for section in generated_doc.sections
+                for footer in (section.footer, section.first_page_footer, section.even_page_footer)
+                for paragraph in footer.paragraphs
+            )
 
         self.assertEqual(result.documents_count, 1)
         self.assertEqual(len(names), 1)
         self.assertNotIn("{{", generated_text)
+        self.assertNotIn("Приложение", generated_text)
+        self.assertNotIn("Жилищник", generated_footer_text)
+        self.assertNotIn("1077746269810", generated_footer_text)
         self.assertIn("Тестовый Должник", generated_text)
 
 
