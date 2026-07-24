@@ -7,12 +7,16 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from docx import Document
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from app.modules.court_orders.generate_court_orders_from_registry import (
     calculate_state_duty,
     generate_court_orders_zip_result,
+    load_base_data,
+    load_jurisdiction_data,
     load_static_data,
+    validate_base_data,
+    validate_jurisdiction_data,
 )
 
 
@@ -105,17 +109,85 @@ class CourtOrdersGenerationTests(unittest.TestCase):
 
             with ZipFile(output_zip_path) as archive:
                 names = archive.namelist()
-                archive.extract(names[0], temp)
+                docx_name = next(name for name in names if name.endswith(".docx"))
+                archive.extract(docx_name, temp)
 
-            generated_doc = Document(str(temp / names[0]))
+            generated_doc = Document(str(temp / docx_name))
             generated_text = "\n".join(paragraph.text for paragraph in generated_doc.paragraphs)
 
         self.assertEqual(result.documents_count, 1)
         self.assertEqual(result.skipped_count, 1)
         self.assertEqual(result.total_debt_amount, Decimal("1000.00"))
-        self.assertEqual(len(names), 1)
+        self.assertEqual(len([name for name in names if name.endswith(".docx")]), 1)
+        self.assertIn("errors.xlsx", names)
         self.assertIn("Иванов Иван", generated_text)
         self.assertIn("ООО \"ТЕСТ\"", generated_text)
+
+    def test_separate_base_and_jurisdiction_files_are_joined_by_object(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            base_path = temp / "base.xlsx"
+            jurisdiction_path = temp / "jurisdiction.xlsx"
+            _build_static_data(base_path)
+            _build_static_data(jurisdiction_path)
+
+            base = load_base_data(base_path)
+            jurisdiction = load_jurisdiction_data(jurisdiction_path)
+
+        self.assertEqual(set(base), {"1297"})
+        self.assertEqual(set(jurisdiction), {"1297"})
+        self.assertEqual(jurisdiction["1297"].court, "Мировому судье судебного участка № 1")
+
+    def test_validation_reports_missing_court_address(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            static_path = Path(temp_dir) / "static.xlsx"
+            _build_static_data(static_path)
+
+            base_report = validate_base_data(static_path)
+            jurisdiction_report = validate_jurisdiction_data(static_path)
+
+        self.assertEqual(base_report.objects_count, 1)
+        self.assertEqual(base_report.warning_counts, {})
+        self.assertEqual(jurisdiction_report.warning_counts, {"без адреса суда": 1})
+
+    def test_duplicate_object_code_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            static_path = Path(temp_dir) / "static.xlsx"
+            _build_static_data(static_path)
+            workbook = load_workbook(static_path)
+            worksheet = workbook.active
+            worksheet.append(list(worksheet.iter_rows(min_row=2, max_row=2, values_only=True))[0])
+            workbook.save(static_path)
+
+            with self.assertRaisesRegex(ValueError, "повторяется код объекта 1297"):
+                load_base_data(static_path)
+
+    def test_skipped_rows_are_written_to_errors_workbook(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            registry_path = temp / "registry.xlsx"
+            static_path = temp / "static.xlsx"
+            template_path = temp / "template.docx"
+            output_zip_path = temp / "court_orders.zip"
+            _build_registry(
+                registry_path,
+                [["99990001", "Петров Петр", "Москва", "01.01.2026 - 31.01.2026", 2000]],
+            )
+            _build_static_data(static_path)
+            _build_template(template_path)
+
+            result = generate_court_orders_zip_result(
+                registry_path=str(registry_path),
+                template_path=str(template_path),
+                static_data_path=str(static_path),
+                output_zip_path=str(output_zip_path),
+            )
+            with ZipFile(output_zip_path) as archive:
+                names = archive.namelist()
+
+        self.assertEqual(result.documents_count, 0)
+        self.assertEqual(result.skipped_count, 1)
+        self.assertEqual(names, ["errors.xlsx"])
 
 
 if __name__ == "__main__":

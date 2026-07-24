@@ -42,6 +42,37 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(settings.admin_ids, {111})
 
+    def test_court_order_paths_support_new_and_legacy_variables(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COURT_ORDERS_BASE_DATA_PATH": "base.xlsx",
+                "COURT_ORDERS_JURISDICTION_PATH": "jurisdiction.xlsx",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+        self.assertEqual(settings.court_orders_base_data_path.name, "base.xlsx")
+        self.assertEqual(
+            settings.court_orders_jurisdiction_path.name,
+            "jurisdiction.xlsx",
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "COURT_ORDERS_BASE_DATA_PATH": "",
+                "COURT_ORDERS_JURISDICTION_PATH": "",
+                "COURT_ORDERS_STATIC_DATA_PATH": "legacy.xlsx",
+            },
+            clear=True,
+        ):
+            legacy_settings = load_settings()
+        self.assertEqual(
+            legacy_settings.court_orders_base_data_path.name,
+            "legacy.xlsx",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,8 @@ from app.modules.excel_normalizer.build_debt_registry_template import build_regi
 
 DEFAULT_CLAIM_TEMPLATE = PROJECT_ROOT / "app" / "modules" / "claims" / "claim_template.docx"
 DEFAULT_COURT_ORDER_TEMPLATE = PROJECT_ROOT / "app" / "modules" / "court_orders" / "court_order_template.docx"
-DEFAULT_COURT_ORDERS_STATIC_DATA = PROJECT_ROOT / "storage" / "court_orders_static_data.xlsx"
+DEFAULT_COURT_ORDERS_BASE_DATA = PROJECT_ROOT / "storage" / "court_orders" / "base_data.xlsx"
+DEFAULT_COURT_ORDERS_JURISDICTION = PROJECT_ROOT / "storage" / "court_orders" / "jurisdiction.xlsx"
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -88,19 +89,31 @@ def run_registry_to_court_orders(registry_path: str, run_dir: str) -> str:
     output_dir = _ensure_dir(run_path / "output")
     output_zip_path = output_dir / "court_orders.zip"
 
-    static_data = settings.court_orders_static_data_path or DEFAULT_COURT_ORDERS_STATIC_DATA
-    if not static_data.exists():
+    base_data = settings.court_orders_base_data_path or DEFAULT_COURT_ORDERS_BASE_DATA
+    jurisdiction = (
+        settings.court_orders_jurisdiction_path
+        or DEFAULT_COURT_ORDERS_JURISDICTION
+    )
+    if not base_data.exists():
         raise FileNotFoundError(
-            f"БЗ для судебных заявлений не найдена: {static_data}. "
-            "Загрузите файл через /courtdata или задайте COURT_ORDERS_STATIC_DATA_PATH."
+            f"Основная БЗ для судебных заявлений не найдена: {base_data}. "
+            "Загрузите файл через /courtdata."
         )
-    if not static_data.is_file():
-        raise ValueError(f"COURT_ORDERS_STATIC_DATA_PATH must point to an .xlsx file: {static_data}")
+    if not jurisdiction.exists():
+        raise FileNotFoundError(
+            f"БЗ подсудности не найдена: {jurisdiction}. "
+            "Загрузите файл через /jurisdiction."
+        )
+    if not base_data.is_file():
+        raise ValueError(f"Путь к основной БЗ должен указывать на .xlsx: {base_data}")
+    if not jurisdiction.is_file():
+        raise ValueError(f"Путь к БЗ подсудности должен указывать на .xlsx: {jurisdiction}")
 
     generate_court_orders_zip(
         registry_path=registry_path,
         template_path=str(DEFAULT_COURT_ORDER_TEMPLATE),
-        static_data_path=str(static_data),
+        base_data_path=str(base_data),
+        jurisdiction_path=str(jurisdiction),
         output_zip_path=str(output_zip_path),
     )
     return str(output_zip_path)

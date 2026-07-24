@@ -25,9 +25,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--claim-date", default=today.strftime("%d.%m.%Y"), help="Дата претензии")
     parser.add_argument("--payment-deadline", default=default_deadline.strftime("%d.%m.%Y"), help="Срок оплаты")
     parser.add_argument(
-        "--static-data",
-        default="storage/court_orders_static_data.xlsx",
-        help="БЗ для судебных заявлений, используется только с --mode court-orders",
+        "--base-data",
+        default="storage/court_orders/base_data.xlsx",
+        help="Основная БЗ, используется только с --mode court-orders",
+    )
+    parser.add_argument(
+        "--jurisdiction",
+        default="storage/court_orders/jurisdiction.xlsx",
+        help="БЗ подсудности, используется только с --mode court-orders",
     )
     parser.add_argument("--application-date", default=None, help="Дата заявления, используется только с --mode court-orders")
     return parser.parse_args()
@@ -44,7 +49,8 @@ def main() -> None:
                     if args.template != "app/modules/claims/claim_template.docx"
                     else "app/modules/court_orders/court_order_template.docx"
                 ),
-                static_data_path=args.static_data,
+                base_data_path=args.base_data,
+                jurisdiction_path=args.jurisdiction,
                 output_zip_path=args.out,
                 application_date=args.application_date,
             )
@@ -63,7 +69,9 @@ def main() -> None:
     if args.mode == "court-orders":
         print(f"Создано заявлений: {result.documents_count}")
         if result.skipped_count:
-            print(f"Пропущено строк без БЗ по объекту: {result.skipped_count}")
+            print(f"Пропущено строк: {result.skipped_count}")
+        if result.warnings_count:
+            print(f"Предупреждений: {result.warnings_count}")
         print(f"Итоговая сумма долга: {format_money(result.total_debt_amount)}")
     else:
         print(f"Создано претензий: {result.documents_count}")
