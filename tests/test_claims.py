@@ -83,6 +83,48 @@ class ClaimsGenerationTests(unittest.TestCase):
         self.assertEqual(len(names), 2)
         self.assertTrue(all(name.endswith(".docx") for name in names))
 
+    def test_generate_claims_zip_result_removes_deprecated_template_elements(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            registry_path = temp / "registry.xlsx"
+            template_path = temp / "template.docx"
+            output_zip_path = temp / "claims.zip"
+            _build_registry(
+                registry_path,
+                [["12970001", "Тестовый Должник", "Москва, машиноместо № 0001", "01.01.2026", 1000]],
+            )
+
+            document = Document()
+            document.add_paragraph("Должник: {{ debtor_name }}")
+            document.add_paragraph("Приложение: расчет задолженности.")
+            document.sections[0].footer.paragraphs[0].text = 'ООО "УК «Жилищник»" · ОГРН 1077746269810'
+            document.save(template_path)
+
+            generate_claims_zip_result(
+                registry_path=str(registry_path),
+                template_path=str(template_path),
+                output_zip_path=str(output_zip_path),
+                claim_date="01.03.2026",
+                payment_deadline="31.03.2026",
+            )
+
+            with ZipFile(output_zip_path) as archive:
+                names = archive.namelist()
+                archive.extract(names[0], temp)
+
+            generated_doc = Document(str(temp / names[0]))
+            generated_text = "\n".join(paragraph.text for paragraph in generated_doc.paragraphs)
+            generated_footer_text = "\n".join(
+                paragraph.text
+                for section in generated_doc.sections
+                for footer in (section.footer, section.first_page_footer, section.even_page_footer)
+                for paragraph in footer.paragraphs
+            )
+
+        self.assertNotIn("Приложение", generated_text)
+        self.assertNotIn("Жилищник", generated_footer_text)
+        self.assertNotIn("1077746269810", generated_footer_text)
+
     def test_generate_claims_zip_result_rejects_empty_registry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)

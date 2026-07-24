@@ -202,6 +202,23 @@ def _replace_in_doc(doc: Document, replacements: dict[str, str]) -> None:
                             _replace_text_in_paragraph(paragraph, replacements)
 
 
+def _remove_paragraph(paragraph) -> None:
+    paragraph._element.getparent().remove(paragraph._element)
+
+
+def _remove_deprecated_claim_elements(doc: Document) -> None:
+    for paragraph in list(doc.paragraphs):
+        if "Приложение:" in paragraph.text:
+            _remove_paragraph(paragraph)
+
+    for section in doc.sections:
+        for footer in (section.footer, section.first_page_footer, section.even_page_footer):
+            for paragraph in footer.paragraphs:
+                paragraph.text = ""
+            for table in list(footer.tables):
+                table._element.getparent().remove(table._element)
+
+
 def build_replacements(row: ClaimRow, claim_date: str, payment_deadline: str) -> dict[str, str]:
     context = dict(DEFAULT_CONTEXT)
     context.update(
@@ -255,6 +272,7 @@ def generate_claims_zip_result(
         for index, row in enumerate(rows, start=1):
             doc = Document(str(template))
             _replace_in_doc(doc, build_replacements(row, claim_date, payment_deadline))
+            _remove_deprecated_claim_elements(doc)
 
             base_name = safe_filename(f"{index:03d}_{row.account_number}_{row.debtor_name}")
             file_name = base_name + ".docx"
