@@ -15,7 +15,11 @@ from openpyxl import load_workbook
 
 from app.bot.keyboards import main_menu_keyboard
 from app.config import load_settings
-from app.modules.court_orders.generate_court_orders_from_registry import load_static_data
+from app.modules.court_orders.generate_court_orders_from_registry import (
+    WorkbookValidationReport,
+    validate_base_data,
+    validate_jurisdiction_data,
+)
 from app.modules.excel_normalizer.build_debt_registry_template import load_object_addresses
 from app.pipeline import (
     PROJECT_ROOT,
@@ -23,13 +27,15 @@ from app.pipeline import (
     run_registry_to_claims,
     run_registry_to_court_orders,
 )
+from app.shared.reference_files import install_validated_reference_file
 
 
 router = Router()
 logger = logging.getLogger(__name__)
 ALLOWED_EXTENSIONS = {".xlsx", ".xlsm"}
 DEFAULT_OBJECT_ADDRESSES_PATH = PROJECT_ROOT / "storage" / "object_addresses.xlsx"
-DEFAULT_COURT_ORDERS_STATIC_DATA_PATH = PROJECT_ROOT / "storage" / "court_orders_static_data.xlsx"
+DEFAULT_COURT_ORDERS_BASE_DATA_PATH = PROJECT_ROOT / "storage" / "court_orders" / "base_data.xlsx"
+DEFAULT_COURT_ORDERS_JURISDICTION_PATH = PROJECT_ROOT / "storage" / "court_orders" / "jurisdiction.xlsx"
 
 
 class DocumentFlow(StatesGroup):
@@ -43,7 +49,8 @@ ACTION_PROMPTS = {
         "Адрес, Период задолженности, Сумма долга."
     ),
     "dictionary": "Загрузите Excel-справочник адресов объектов.",
-    "court_data": "Загрузите Excel-БЗ для судебных заявлений.",
+    "court_data": "Загрузите основную Excel-БЗ: объекты, компании, реквизиты, протоколы и ставки.",
+    "jurisdiction": "Загрузите Excel-БЗ подсудности с кодами объектов и судебными участками.",
     "court_orders": (
         "Загрузите готовый Excel-реестр с колонками: Лицевой счет, ФИО, "
         "Адрес, Период задолженности, Сумма долга."
@@ -58,8 +65,9 @@ HELP_TEXT = (
     "2. registry.xlsx -> claims.zip. Обязательные колонки: Лицевой счет, ФИО, Адрес, "
     "Период задолженности, Сумма долга.\n"
     "3. Справочник адресов объектов можно обновить командой /dictionary.\n"
-    "4. БЗ для судебных заявлений можно обновить командой /courtdata.\n"
-    "5. Судебные заявления генерируются из registry.xlsx, не из архива претензий."
+    "4. Основную БЗ для судебных заявлений можно обновить командой /courtdata.\n"
+    "5. БЗ подсудности можно обновить командой /jurisdiction.\n"
+    "6. Судебные заявления генерируются из registry.xlsx, не из архива претензий."
 )
 
 
@@ -120,9 +128,17 @@ def _object_addresses_path() -> Path:
     return settings.object_addresses_path or DEFAULT_OBJECT_ADDRESSES_PATH
 
 
-def _court_orders_static_data_path() -> Path:
+def _court_orders_base_data_path() -> Path:
     settings = load_settings()
-    return settings.court_orders_static_data_path or DEFAULT_COURT_ORDERS_STATIC_DATA_PATH
+    return settings.court_orders_base_data_path or DEFAULT_COURT_ORDERS_BASE_DATA_PATH
+
+
+def _court_orders_jurisdiction_path() -> Path:
+    settings = load_settings()
+    return (
+        settings.court_orders_jurisdiction_path
+        or DEFAULT_COURT_ORDERS_JURISDICTION_PATH
+    )
 
 
 def _validate_document(document) -> str | None:
@@ -154,12 +170,47 @@ def _install_object_addresses(upload_path: Path) -> Path:
     return target_path
 
 
-def _install_court_orders_static_data(upload_path: Path) -> Path:
-    target_path = _court_orders_static_data_path()
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    load_static_data(upload_path)
-    upload_path.replace(target_path)
-    return target_path
+def _install_court_orders_base_data(
+    upload_path: Path,
+) -> tuple[WorkbookValidationReport, bool]:
+    report, backup_path = install_validated_reference_file(
+        upload_path,
+        _court_orders_base_data_path(),
+        validate_base_data,
+    )
+    return report, backup_path is not None
+
+
+def _install_court_orders_jurisdiction(
+    upload_path: Path,
+) -> tuple[WorkbookValidationReport, bool]:
+    report, backup_path = install_validated_reference_file(
+        upload_path,
+        _court_orders_jurisdiction_path(),
+        validate_jurisdiction_data,
+    )
+    return report, backup_path is not None
+
+
+def _format_reference_report(
+    report: WorkbookValidationReport,
+    backup_created: bool,
+) -> str:
+    lines = [
+        f"Готово: {report.kind} обновлена.",
+        f"Объектов: {report.objects_count}.",
+    ]
+    if report.warning_counts:
+        lines.append("Предупреждения:")
+        lines.extend(
+            f"• {label}: {count}"
+            for label, count in report.warning_counts.items()
+        )
+    else:
+        lines.append("Предупреждений нет.")
+    if backup_created:
+        lines.append("Предыдущая версия сохранена в резервных копиях.")
+    return "\n".join(lines)
 
 
 async def _send_menu(message: Message) -> None:
@@ -194,6 +245,15 @@ async def upload_court_data(message: Message, state: FSMContext) -> None:
     await message.answer(ACTION_PROMPTS["court_data"])
 
 
+@router.message(Command("jurisdiction"))
+async def upload_jurisdiction(message: Message, state: FSMContext) -> None:
+    if await _deny_if_needed(message):
+        return
+    await state.update_data(action="jurisdiction")
+    await state.set_state(DocumentFlow.waiting_for_file)
+    await message.answer(ACTION_PROMPTS["jurisdiction"])
+
+
 @router.callback_query(F.data == "action:help")
 async def show_help(callback: CallbackQuery) -> None:
     if await _deny_callback_if_needed(callback):
@@ -202,7 +262,7 @@ async def show_help(callback: CallbackQuery) -> None:
     await _answer_callback_safely(callback)
 
 
-@router.callback_query(F.data.in_({"action:normalize", "action:claims", "action:dictionary", "action:court_data", "action:court_orders"}))
+@router.callback_query(F.data.in_({"action:normalize", "action:claims", "action:dictionary", "action:court_data", "action:jurisdiction", "action:court_orders"}))
 async def choose_action(callback: CallbackQuery, state: FSMContext) -> None:
     if await _deny_callback_if_needed(callback):
         return
@@ -221,7 +281,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
 
     data = await state.get_data()
     action = data.get("action")
-    if action not in {"normalize", "claims", "dictionary", "court_data", "court_orders"}:
+    if action not in {"normalize", "claims", "dictionary", "court_data", "jurisdiction", "court_orders"}:
         await state.clear()
         await message.answer("Выберите действие заново.", reply_markup=main_menu_keyboard())
         return
@@ -247,9 +307,21 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
                 reply_markup=main_menu_keyboard(),
             )
         elif action == "court_data":
-            target_path = await asyncio.to_thread(_install_court_orders_static_data, input_path)
+            report, backup_created = await asyncio.to_thread(
+                _install_court_orders_base_data,
+                input_path,
+            )
             await message.answer(
-                f"Готово: БЗ для судебных заявлений обновлена.\nПуть: {target_path}",
+                _format_reference_report(report, backup_created),
+                reply_markup=main_menu_keyboard(),
+            )
+        elif action == "jurisdiction":
+            report, backup_created = await asyncio.to_thread(
+                _install_court_orders_jurisdiction,
+                input_path,
+            )
+            await message.answer(
+                _format_reference_report(report, backup_created),
                 reply_markup=main_menu_keyboard(),
             )
         elif action == "normalize":
@@ -276,8 +348,13 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
             )
     except Exception as exc:
         logger.exception("Processing failed. run_dir=%s action=%s", run_dir, action)
+        error_text = (
+            str(exc)
+            if action in {"court_data", "jurisdiction"} and isinstance(exc, (ValueError, FileNotFoundError))
+            else "Ошибка обработки файла. Проверьте формат и попробуйте еще раз."
+        )
         await message.answer(
-            "Ошибка обработки файла. Проверьте формат и попробуйте еще раз.",
+            error_text,
             reply_markup=main_menu_keyboard(),
         )
         return

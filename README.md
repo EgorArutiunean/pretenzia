@@ -22,7 +22,10 @@ copy .env.example .env
 - `BOT_TOKEN` — токен Telegram-бота.
 - `ADMIN_IDS` — разрешенные Telegram user id через запятую. Бот не запускается без этого списка.
 - `OBJECT_ADDRESSES_PATH` — путь к справочнику адресов объектов для нормализации ОНВ. Для Docker/Coolify используйте `/app/storage/object_addresses.xlsx`.
-- `COURT_ORDERS_STATIC_DATA_PATH` — путь к Excel-агрегатору данных для судебных заявлений. Для Docker/Coolify используйте `/app/storage/court_orders_static_data.xlsx`.
+- `COURT_ORDERS_BASE_DATA_PATH` — основная БЗ объектов, компаний и реквизитов. Для Docker/Coolify используйте `/app/storage/court_orders/base_data.xlsx`.
+- `COURT_ORDERS_JURISDICTION_PATH` — БЗ судебных участков. Для Docker/Coolify используйте `/app/storage/court_orders/jurisdiction.xlsx`.
+
+Устаревшая переменная `COURT_ORDERS_STATIC_DATA_PATH` временно поддерживается как путь к основной БЗ.
 
 Не задавайте `CLAIM_DATE` и `PAYMENT_DEADLINE` в production, если даты должны рассчитываться автоматически. По умолчанию дата претензии — текущий день, срок оплаты — текущий день + 30 дней. Эти переменные нужны только для ручного переопределения дат.
 
@@ -50,7 +53,12 @@ docker compose logs -f bot
 
 Справочник адресов также можно обновить через Telegram-бота: команда `/dictionary` или кнопка `Обновить справочник адресов`. Загруженный файл сохраняется в `OBJECT_ADDRESSES_PATH`.
 
-Excel-агрегатор для судебных заявлений можно обновить через Telegram-бота: команда `/courtdata` или кнопка `Обновить БЗ для суда`. Загруженный файл сохраняется в `COURT_ORDERS_STATIC_DATA_PATH`.
+Справочники третьего модуля обновляются через Telegram-бота:
+
+- `/courtdata` или кнопка `Обновить основную БЗ`;
+- `/jurisdiction` или кнопка `Обновить подсудность`.
+
+Перед заменой файл проверяется. Предыдущие версии сохраняются в `storage/court_orders/backups`, последние пять резервных копий каждого справочника остаются доступными для отката.
 
 ## Autodeploy
 
@@ -95,13 +103,13 @@ python -m app.modules.claims.generate_claims_from_registry registry_template.xls
 Генерация заявлений о вынесении судебного приказа:
 
 ```powershell
-python -m app.main registry_template.xlsx --mode court-orders --static-data storage/court_orders_static_data.xlsx --out storage/output/court_orders.zip
+python -m app.main registry_template.xlsx --mode court-orders --base-data storage/court_orders/base_data.xlsx --jurisdiction storage/court_orders/jurisdiction.xlsx --out storage/output/court_orders.zip
 ```
 
 Прямой запуск модуля:
 
 ```powershell
-python -m app.modules.court_orders.generate_court_orders_from_registry registry_template.xlsx --static-data storage/court_orders_static_data.xlsx --out storage/output/court_orders.zip
+python -m app.modules.court_orders.generate_court_orders_from_registry registry_template.xlsx --base-data storage/court_orders/base_data.xlsx --jurisdiction storage/court_orders/jurisdiction.xlsx --out storage/output/court_orders.zip
 ```
 
 ## Структура

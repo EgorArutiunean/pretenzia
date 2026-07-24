@@ -26,8 +26,14 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🏛️ Обновить БЗ для суда",
+                    text="🏢 Обновить основную БЗ",
                     callback_data="action:court_data",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏛️ Обновить подсудность",
+                    callback_data="action:jurisdiction",
                 )
             ],
             [
