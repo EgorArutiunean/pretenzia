@@ -13,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 from openpyxl import load_workbook
 
-from app.bot.keyboards import main_menu_keyboard
+from app.bot.keyboards import data_updates_menu_keyboard, main_menu_keyboard
 from app.config import load_settings
 from app.modules.court_orders.generate_court_orders_from_registry import (
     WorkbookValidationReport,
@@ -252,6 +252,36 @@ async def upload_jurisdiction(message: Message, state: FSMContext) -> None:
     await state.update_data(action="jurisdiction")
     await state.set_state(DocumentFlow.waiting_for_file)
     await message.answer(ACTION_PROMPTS["jurisdiction"])
+
+
+@router.callback_query(F.data == "menu:data_updates")
+async def show_data_updates_menu(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if await _deny_callback_if_needed(callback):
+        return
+    await state.clear()
+    await callback.message.edit_text(
+        "Обновление данных:",
+        reply_markup=data_updates_menu_keyboard(),
+    )
+    await _answer_callback_safely(callback)
+
+
+@router.callback_query(F.data == "menu:main")
+async def show_main_menu(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    if await _deny_callback_if_needed(callback):
+        return
+    await state.clear()
+    await callback.message.edit_text(
+        "Выберите действие:",
+        reply_markup=main_menu_keyboard(),
+    )
+    await _answer_callback_safely(callback)
 
 
 @router.callback_query(F.data == "action:help")
