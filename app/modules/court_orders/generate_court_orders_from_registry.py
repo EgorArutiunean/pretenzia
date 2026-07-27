@@ -5,9 +5,9 @@ import re
 import shutil
 import sys
 import uuid
-from dataclasses import dataclass
-from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from dataclasses import dataclass, replace
+from datetime import date, datetime
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +147,7 @@ def normalize_header(value: Any) -> str:
 
 def object_code_from_account(account_number: str) -> str:
     digits = re.sub(r"\D+", "", account_number)
-    if len(digits) < 4:
+    if len(digits) != 8:
         return ""
     return digits[:4]
 
@@ -463,31 +463,76 @@ def calculate_state_duty(amount: Decimal) -> Decimal:
     if amount <= 0:
         return Decimal("0.00")
     if amount <= Decimal("100000"):
-        duty = max(amount * Decimal("0.04"), Decimal("4000.00"))
-        return (duty / Decimal("2")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    if amount <= Decimal("300000"):
+        duty = Decimal("4000")
+    elif amount <= Decimal("300000"):
         duty = Decimal("4000") + (amount - Decimal("100000")) * Decimal("0.03")
     elif amount <= Decimal("500000"):
         duty = Decimal("10000") + (amount - Decimal("300000")) * Decimal("0.025")
     elif amount <= Decimal("1000000"):
         duty = Decimal("15000") + (amount - Decimal("500000")) * Decimal("0.02")
-    else:
+    elif amount <= Decimal("3000000"):
         duty = Decimal("25000") + (amount - Decimal("1000000")) * Decimal("0.01")
-    return (duty / Decimal("2")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    elif amount <= Decimal("8000000"):
+        duty = Decimal("45000") + (amount - Decimal("3000000")) * Decimal("0.007")
+    elif amount <= Decimal("24000000"):
+        duty = Decimal("80000") + (amount - Decimal("8000000")) * Decimal("0.0035")
+    elif amount <= Decimal("50000000"):
+        duty = Decimal("136000") + (amount - Decimal("24000000")) * Decimal("0.003")
+    elif amount <= Decimal("100000000"):
+        duty = Decimal("214000") + (amount - Decimal("50000000")) * Decimal("0.002")
+    else:
+        duty = min(
+            Decimal("314000") + (amount - Decimal("100000000")) * Decimal("0.0015"),
+            Decimal("900000"),
+        )
+    return (duty / Decimal("2")).quantize(Decimal("1"), rounding=ROUND_FLOOR)
+
+
+def calculate_court_debt(
+    source_debt: Decimal,
+    monthly_rate: Decimal,
+) -> tuple[int, Decimal]:
+    if monthly_rate <= 0 or monthly_rate != monthly_rate.to_integral_value():
+        raise ValueError("Ставка должна быть положительным целым числом.")
+    full_months = int((source_debt / monthly_rate).to_integral_value(rounding=ROUND_FLOOR))
+    return full_months, monthly_rate * full_months
+
+
+def calculate_court_period(period_text: str, full_months: int) -> str:
+    dates = [
+        datetime.strptime(value, "%d.%m.%Y")
+        for value in re.findall(r"\d{2}\.\d{2}\.\d{4}", period_text)
+    ]
+    if not dates:
+        raise ValueError("Не удалось определить последний месяц периода задолженности.")
+    end = max(dates).replace(day=1)
+    start_month_index = end.year * 12 + end.month - 1 - (full_months - 1)
+    start = datetime(start_month_index // 12, start_month_index % 12 + 1, 1)
+    return f"{start:%d.%m.%Y} - {end:%d.%m.%Y}"
+
+
+def court_order_exclusion_reason(full_months: int, court_debt: Decimal) -> str | None:
+    if full_months == 0:
+        return "Задолженность меньше одной месячной ставки."
+    if court_debt < Decimal("5000"):
+        return "Сумма для судебного приказа менее 5 000 рублей."
+    if court_debt > Decimal("500000"):
+        return "Сумма превышает предел приказного производства — 500 000 рублей."
+    return None
 
 
 def build_replacements(
     row: ClaimRow,
     static_data: CourtOrderStaticData,
     application_date: str,
-    penalty_amount: Decimal = Decimal("0.00"),
+    penalty_amount: Decimal | None = None,
     debtor_data: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     debtor_data = debtor_data or {}
-    total_claim_amount = row.debt_amount + penalty_amount
+    total_claim_amount = row.debt_amount
     state_duty = calculate_state_duty(total_claim_amount)
     context = {
-        "court_name": static_data.court or "мировому судье судебного участка",
+        "court_name": static_data.court,
         "court_address": static_data.court_address,
         "claimant_name": static_data.claimant_name,
         "claimant_company": static_data.company,
@@ -498,12 +543,10 @@ def build_replacements(
         "claimant_legal_address": static_data.legal_address,
         "claimant_director_name": static_data.director_name,
         "debtor_name": row.debtor_name,
-        "debtor_birth_date": str(debtor_data.get("Дата рождения") or "не указана"),
-        "debtor_birth_place": str(debtor_data.get("Место рождения") or "не указано"),
-        "debtor_registration_address": str(
-            debtor_data.get("Адрес регистрации") or "не указан"
-        ),
-        "debtor_passport": str(debtor_data.get("Идентификатор должника") or "не указан"),
+        "debtor_birth_date": str(debtor_data.get("Дата рождения") or ""),
+        "debtor_birth_place": str(debtor_data.get("Место рождения") or ""),
+        "debtor_registration_address": str(debtor_data.get("Адрес регистрации") or ""),
+        "debtor_passport": str(debtor_data.get("Идентификатор должника") or ""),
         "account_number": row.account_number,
         "object_code": static_data.object_code,
         "object_address": static_data.object_address or row.object_address,
@@ -511,8 +554,8 @@ def build_replacements(
         "debt_period": row.debt_period,
         "debt_amount": format_money(row.debt_amount),
         "debt_amount_words": money_to_words(row.debt_amount),
-        "penalty_amount": format_money(penalty_amount),
-        "penalty_amount_words": money_to_words(penalty_amount),
+        "penalty_amount": "",
+        "penalty_amount_words": "",
         "total_claim_amount": format_money(total_claim_amount),
         "total_claim_amount_words": money_to_words(total_claim_amount),
         "state_duty": format_money(state_duty),
@@ -538,7 +581,11 @@ def _base_data_errors(static_data: CourtOrderStaticData) -> list[str]:
         missing.append("реквизиты")
     if not static_data.protocol:
         missing.append("протокол")
-    if static_data.monthly_rate is None:
+    if (
+        static_data.monthly_rate is None
+        or static_data.monthly_rate <= 0
+        or static_data.monthly_rate != static_data.monthly_rate.to_integral_value()
+    ):
         missing.append("ставка")
     if not static_data.inn:
         missing.append("ИНН")
@@ -569,7 +616,11 @@ def _write_issues_workbook(issues: list[GenerationIssue], output_path: Path) -> 
     workbook.remove(workbook.active)
     headers = ["Лицевой счет", "ФИО", "Код объекта", "Причина"]
 
-    for severity, title in (("error", "Ошибки"), ("warning", "Предупреждения")):
+    for severity, title in (
+        ("error", "Ошибки"),
+        ("warning", "Предупреждения"),
+        ("not_generated", "Не сформированы"),
+    ):
         rows = [issue for issue in issues if issue.severity == severity]
         if not rows:
             continue
@@ -628,7 +679,6 @@ def generate_court_orders_zip_result(
     base_by_object = load_base_data(base_data_path)
     jurisdiction_by_object = load_jurisdiction_data(jurisdiction_path)
     static_by_object = merge_reference_data(base_by_object, jurisdiction_by_object)
-    penalty_by_account = read_optional_money_by_account(registry_path, {"Сумма пени", "Пени"})
     debtor_data_by_account = read_optional_columns_by_account(
         registry_path,
         {
@@ -689,31 +739,6 @@ def generate_court_orders_zip_result(
                 )
                 skipped_count += 1
                 continue
-            if object_code not in jurisdiction_by_object:
-                issues.append(
-                    GenerationIssue(
-                        severity="error",
-                        account_number=row.account_number,
-                        debtor_name=row.debtor_name,
-                        object_code=object_code,
-                        reason="Код объекта отсутствует в БЗ подсудности.",
-                    )
-                )
-                skipped_count += 1
-                continue
-            if not static_data.court:
-                issues.append(
-                    GenerationIssue(
-                        severity="error",
-                        account_number=row.account_number,
-                        debtor_name=row.debtor_name,
-                        object_code=object_code,
-                        reason="В БЗ подсудности не заполнен судебный участок.",
-                    )
-                )
-                skipped_count += 1
-                continue
-
             missing_base_fields = _base_data_errors(static_data)
             if missing_base_fields:
                 issues.append(
@@ -728,8 +753,44 @@ def generate_court_orders_zip_result(
                 skipped_count += 1
                 continue
 
+            full_months, court_debt = calculate_court_debt(
+                row.debt_amount,
+                static_data.monthly_rate,
+            )
+            exclusion_reason = court_order_exclusion_reason(full_months, court_debt)
+            if exclusion_reason:
+                issues.append(
+                    GenerationIssue(
+                        severity="not_generated",
+                        account_number=row.account_number,
+                        debtor_name=row.debtor_name,
+                        object_code=object_code,
+                        reason=exclusion_reason,
+                    )
+                )
+                skipped_count += 1
+                continue
+            try:
+                court_period = calculate_court_period(row.debt_period, full_months)
+            except ValueError as exc:
+                issues.append(
+                    GenerationIssue(
+                        severity="error",
+                        account_number=row.account_number,
+                        debtor_name=row.debtor_name,
+                        object_code=object_code,
+                        reason=str(exc),
+                    )
+                )
+                skipped_count += 1
+                continue
+
+            court_row = replace(
+                row,
+                debt_amount=court_debt,
+                debt_period=court_period,
+            )
             doc = Document(str(template))
-            penalty_amount = penalty_by_account.get(row.account_number, Decimal("0.00"))
             debtor_data = debtor_data_by_account.get(row.account_number, {})
             warning = _debtor_data_warning(debtor_data)
             if warning:
@@ -740,6 +801,16 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason=warning,
+                    )
+                )
+            if not static_data.court:
+                issues.append(
+                    GenerationIssue(
+                        severity="warning",
+                        account_number=row.account_number,
+                        debtor_name=row.debtor_name,
+                        object_code=object_code,
+                        reason="В БЗ подсудности не заполнен судебный участок.",
                     )
                 )
             if not static_data.court_address:
@@ -755,10 +826,10 @@ def generate_court_orders_zip_result(
             _replace_in_doc(
                 doc,
                 build_replacements(
-                    row,
+                    court_row,
                     static_data,
                     effective_date,
-                    penalty_amount,
+                    None,
                     debtor_data,
                 ),
             )
@@ -771,10 +842,12 @@ def generate_court_orders_zip_result(
                 counter += 1
             used_names.add(file_name.lower())
 
-            file_path = temp_dir / file_name
+            company_dir = temp_dir / safe_filename(static_data.company)
+            company_dir.mkdir(parents=True, exist_ok=True)
+            file_path = company_dir / file_name
             doc.save(file_path)
             generated_files.append(file_path)
-            total_debt_amount += row.debt_amount
+            total_debt_amount += court_debt
 
         if not generated_files and not issues:
             raise ValueError(
@@ -783,7 +856,7 @@ def generate_court_orders_zip_result(
 
         if issues:
             generated_files.append(_write_issues_workbook(issues, temp_dir / "errors.xlsx"))
-        create_zip(generated_files, output_zip)
+        create_zip(generated_files, output_zip, base_dir=temp_dir)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

@@ -10,7 +10,10 @@ from docx import Document
 from openpyxl import Workbook, load_workbook
 
 from app.modules.court_orders.generate_court_orders_from_registry import (
+    calculate_court_debt,
+    calculate_court_period,
     calculate_state_duty,
+    court_order_exclusion_reason,
     generate_court_orders_zip_result,
     load_base_data,
     load_jurisdiction_data,
@@ -81,6 +84,23 @@ class CourtOrdersGenerationTests(unittest.TestCase):
     def test_calculate_state_duty_for_court_order_uses_half_of_claim_fee(self) -> None:
         self.assertEqual(calculate_state_duty(Decimal("50225.00")), Decimal("2000.00"))
         self.assertEqual(calculate_state_duty(Decimal("150000.00")), Decimal("2750.00"))
+        self.assertEqual(calculate_state_duty(Decimal("140001.00")), Decimal("2600"))
+
+    def test_court_debt_uses_only_full_months(self) -> None:
+        months, amount = calculate_court_debt(Decimal("12550"), Decimal("1300"))
+
+        self.assertEqual(months, 9)
+        self.assertEqual(amount, Decimal("11700"))
+        self.assertEqual(
+            calculate_court_period("01.01.2026 - 30.06.2026", months),
+            "01.10.2025 - 01.06.2026",
+        )
+
+    def test_court_order_amount_boundaries_are_inclusive(self) -> None:
+        self.assertIsNotNone(court_order_exclusion_reason(4, Decimal("4999")))
+        self.assertIsNone(court_order_exclusion_reason(5, Decimal("5000")))
+        self.assertIsNone(court_order_exclusion_reason(500, Decimal("500000")))
+        self.assertIsNotNone(court_order_exclusion_reason(501, Decimal("500001")))
 
     def test_generate_court_orders_zip_result_creates_docx_for_known_objects(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -92,7 +112,7 @@ class CourtOrdersGenerationTests(unittest.TestCase):
             _build_registry(
                 registry_path,
                 [
-                    ["12970001", "Иванов Иван", "Москва, машиноместо № 0001", "01.01.2026 - 31.01.2026", 1000],
+                    ["12970001", "Иванов Иван", "Москва, машиноместо № 0001", "01.01.2026 - 31.01.2026", 10000],
                     ["99990001", "Петров Петр", "Москва, машиноместо № 0001", "01.01.2026 - 31.01.2026", 2000],
                 ],
             )
@@ -117,11 +137,12 @@ class CourtOrdersGenerationTests(unittest.TestCase):
 
         self.assertEqual(result.documents_count, 1)
         self.assertEqual(result.skipped_count, 1)
-        self.assertEqual(result.total_debt_amount, Decimal("1000.00"))
+        self.assertEqual(result.total_debt_amount, Decimal("9500.00"))
         self.assertEqual(len([name for name in names if name.endswith(".docx")]), 1)
         self.assertIn("errors.xlsx", names)
         self.assertIn("Иванов Иван", generated_text)
         self.assertIn("ООО \"ТЕСТ\"", generated_text)
+        self.assertIn("9 500,00", generated_text)
 
     def test_separate_base_and_jurisdiction_files_are_joined_by_object(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
