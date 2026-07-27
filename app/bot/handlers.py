@@ -5,6 +5,7 @@ import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
+from zipfile import ZipFile
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -63,7 +64,7 @@ HELP_TEXT = (
     "КАК РАБОТАТЬ\n"
     "\n"
     "1. Обновление данных\n"
-    "Откройте этот раздел, только когда изменился один из справочников:\n"
+    "Раздел доступен администраторам. Откройте его, когда изменился справочник:\n"
     "• Справочник адресов — коды объектов и адреса;\n"
     "• Основная БЗ — компании, реквизиты, протоколы и ставки;\n"
     "• Подсудность — судебные участки и адреса судов.\n"
@@ -80,8 +81,9 @@ HELP_TEXT = (
     "4. Создать заявления в суд\n"
     "Сначала должны быть загружены Основная БЗ и Подсудность. Затем отправьте "
     "registry.xlsx. Для полного заявления также нужны: Дата рождения, Место рождения, "
-    "Адрес регистрации и Паспорт или Идентификатор должника. Сумму пени можно передать "
-    "в колонке «Сумма пени». Бот вернет court_orders.zip.\n"
+    "Адрес регистрации и Паспорт или Идентификатор должника. Заявление формируется "
+    "только при рассчитанной сумме от 5 000 до 500 000 рублей. Пени пока не "
+    "рассчитываются. Бот вернет court_orders.zip.\n"
     "\n"
     "Если в court_orders.zip есть errors.xlsx, обязательно проверьте листы "
     "«Ошибки» и «Предупреждения» перед использованием документов.\n"
@@ -206,6 +208,18 @@ def _registry_error_count(registry_path: str) -> int:
 
     worksheet = workbook["Ошибки"]
     return max(worksheet.max_row - 1, 0)
+
+
+def _registry_sheet_count(registry_path: str, sheet_name: str) -> int:
+    workbook = load_workbook(registry_path, read_only=True, data_only=True)
+    if sheet_name not in workbook.sheetnames:
+        return 0
+    return max(workbook[sheet_name].max_row - 1, 0)
+
+
+def _zip_docx_count(zip_path: str) -> int:
+    with ZipFile(zip_path) as archive:
+        return sum(name.lower().endswith(".docx") for name in archive.namelist())
 
 
 def _install_object_addresses(upload_path: Path) -> Path:
@@ -422,24 +436,40 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
         elif action == "normalize":
             result_path = await asyncio.to_thread(run_excel_to_registry, str(input_path), str(run_dir))
             error_count = await asyncio.to_thread(_registry_error_count, result_path)
+            good_payers_count = await asyncio.to_thread(
+                _registry_sheet_count,
+                result_path,
+                "Добросовестные плательщики",
+            )
             caption = "Готово: registry.xlsx"
             if error_count:
                 caption += f"\nЕсть строки на листе «Ошибки»: {error_count}."
+            if good_payers_count:
+                caption += (
+                    "\nДобросовестных плательщиков: "
+                    f"{good_payers_count}."
+                )
             await message.answer_document(
                 FSInputFile(result_path),
                 caption=caption,
             )
         elif action == "claims":
             result_path = await asyncio.to_thread(run_registry_to_claims, str(input_path), str(run_dir))
+            documents_count = await asyncio.to_thread(_zip_docx_count, result_path)
             await message.answer_document(
                 FSInputFile(result_path),
-                caption="Готово: claims.zip",
+                caption=f"Готово: claims.zip\nСоздано претензий: {documents_count}.",
             )
         elif action == "court_orders":
             result_path = await asyncio.to_thread(run_registry_to_court_orders, str(input_path), str(run_dir))
+            documents_count = await asyncio.to_thread(_zip_docx_count, result_path)
             await message.answer_document(
                 FSInputFile(result_path),
-                caption="Готово: court_orders.zip",
+                caption=(
+                    "Готово: court_orders.zip\n"
+                    f"Создано заявлений: {documents_count}.\n"
+                    "Проверьте errors.xlsx, если он включён в архив."
+                ),
             )
     except Exception as exc:
         logger.error(
@@ -451,7 +481,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
         )
         error_text = (
             str(exc)
-            if action in {"court_data", "jurisdiction"} and isinstance(exc, (ValueError, FileNotFoundError))
+            if isinstance(exc, (ValueError, FileNotFoundError))
             else "Ошибка обработки файла. Проверьте формат и попробуйте еще раз."
         )
         await message.answer(

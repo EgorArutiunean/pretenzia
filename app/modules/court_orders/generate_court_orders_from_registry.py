@@ -130,6 +130,10 @@ class GenerationIssue:
     debtor_name: str
     object_code: str
     reason: str
+    source_row: int = 0
+    company: str = ""
+    source_amount: Decimal | None = None
+    calculated_amount: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -614,7 +618,16 @@ def _debtor_data_warning(debtor_data: dict[str, Any]) -> str | None:
 def _write_issues_workbook(issues: list[GenerationIssue], output_path: Path) -> Path:
     workbook = Workbook()
     workbook.remove(workbook.active)
-    headers = ["Лицевой счет", "ФИО", "Код объекта", "Причина"]
+    headers = [
+        "Строка реестра",
+        "Лицевой счет",
+        "ФИО",
+        "Код объекта",
+        "Компания",
+        "Исходная задолженность",
+        "Рассчитанная задолженность",
+        "Причина",
+    ]
 
     for severity, title in (
         ("error", "Ошибки"),
@@ -629,21 +642,32 @@ def _write_issues_workbook(issues: list[GenerationIssue], output_path: Path) -> 
         for issue in rows:
             worksheet.append(
                 [
+                    issue.source_row or "",
                     issue.account_number,
                     issue.debtor_name,
                     issue.object_code,
+                    issue.company,
+                    issue.source_amount,
+                    issue.calculated_amount,
                     issue.reason,
                 ]
             )
         worksheet.freeze_panes = "A2"
-        worksheet.auto_filter.ref = f"A1:D{worksheet.max_row}"
+        worksheet.auto_filter.ref = f"A1:H{worksheet.max_row}"
         for cell in worksheet[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="1F4E78")
-        worksheet.column_dimensions["A"].width = 18
-        worksheet.column_dimensions["B"].width = 32
-        worksheet.column_dimensions["C"].width = 16
-        worksheet.column_dimensions["D"].width = 70
+        worksheet.column_dimensions["A"].width = 16
+        worksheet.column_dimensions["B"].width = 18
+        worksheet.column_dimensions["C"].width = 32
+        worksheet.column_dimensions["D"].width = 16
+        worksheet.column_dimensions["E"].width = 32
+        worksheet.column_dimensions["F"].width = 22
+        worksheet.column_dimensions["G"].width = 24
+        worksheet.column_dimensions["H"].width = 70
+        for column in ("F", "G"):
+            for cell in worksheet[column][1:]:
+                cell.number_format = "#,##0.00"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
@@ -721,6 +745,9 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code="",
                         reason="Не удалось определить код объекта из лицевого счета.",
+                        source_row=row.source_row,
+                        company=row.company,
+                        source_amount=row.debt_amount,
                     )
                 )
                 skipped_count += 1
@@ -735,6 +762,9 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason="Код объекта отсутствует в основной БЗ.",
+                        source_row=row.source_row,
+                        company=row.company,
+                        source_amount=row.debt_amount,
                     )
                 )
                 skipped_count += 1
@@ -748,6 +778,9 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason="В основной БЗ не заполнены: " + ", ".join(missing_base_fields),
+                        source_row=row.source_row,
+                        company=static_data.company or row.company,
+                        source_amount=row.debt_amount,
                     )
                 )
                 skipped_count += 1
@@ -766,6 +799,10 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason=exclusion_reason,
+                        source_row=row.source_row,
+                        company=static_data.company,
+                        source_amount=row.debt_amount,
+                        calculated_amount=court_debt,
                     )
                 )
                 skipped_count += 1
@@ -780,6 +817,10 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason=str(exc),
+                        source_row=row.source_row,
+                        company=static_data.company,
+                        source_amount=row.debt_amount,
+                        calculated_amount=court_debt,
                     )
                 )
                 skipped_count += 1
@@ -801,6 +842,10 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason=warning,
+                        source_row=row.source_row,
+                        company=static_data.company,
+                        source_amount=row.debt_amount,
+                        calculated_amount=court_debt,
                     )
                 )
             if not static_data.court:
@@ -811,6 +856,10 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason="В БЗ подсудности не заполнен судебный участок.",
+                        source_row=row.source_row,
+                        company=static_data.company,
+                        source_amount=row.debt_amount,
+                        calculated_amount=court_debt,
                     )
                 )
             if not static_data.court_address:
@@ -821,6 +870,10 @@ def generate_court_orders_zip_result(
                         debtor_name=row.debtor_name,
                         object_code=object_code,
                         reason="В БЗ подсудности не заполнен адрес суда.",
+                        source_row=row.source_row,
+                        company=static_data.company,
+                        source_amount=row.debt_amount,
+                        calculated_amount=court_debt,
                     )
                 )
             _replace_in_doc(

@@ -5,7 +5,7 @@ import re
 import shutil
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -50,6 +50,7 @@ class ClaimRow:
     company: str = ""
     company_inn: str = ""
     company_code: str = ""
+    source_row: int = field(default=0, compare=False)
 
     @property
     def parking_place_number(self) -> str:
@@ -189,18 +190,19 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
                 + ", ".join(missing)
             )
 
-        rows.append(
-            ClaimRow(
-                account_number=account_number,
-                debtor_name=debtor_name,
-                address=address,
-                debt_period=debt_period.replace("-", " - "),
-                debt_amount=amount,
-                company=str(raw_values.get("Компания") or "").strip(),
-                company_inn=str(raw_values.get("ИНН компании") or "").strip(),
-                company_code=str(raw_values.get("Код компании") or "").strip(),
-            )
+        candidate = ClaimRow(
+            account_number=account_number,
+            debtor_name=debtor_name,
+            address=address,
+            debt_period=debt_period.replace("-", " - "),
+            debt_amount=amount,
+            company=str(raw_values.get("Компания") or "").strip(),
+            company_inn=str(raw_values.get("ИНН компании") or "").strip(),
+            company_code=str(raw_values.get("Код компании") or "").strip(),
+            source_row=row_idx,
         )
+        if candidate not in rows:
+            rows.append(candidate)
 
     return rows
 
