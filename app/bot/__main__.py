@@ -9,6 +9,22 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.config import load_settings
 from app.bot.handlers import router
+from app.maintenance.cleanup_storage import cleanup_runs
+
+
+async def cleanup_loop() -> None:
+    while True:
+        try:
+            result = await asyncio.to_thread(
+                cleanup_runs,
+                older_than_hours=24,
+                dry_run=False,
+            )
+            if result.deleted:
+                logging.info("Storage cleanup deleted %d expired run(s)", len(result.deleted))
+        except Exception:
+            logging.error("Storage cleanup failed", exc_info=False)
+        await asyncio.sleep(60 * 60)
 
 
 async def main() -> None:
@@ -28,7 +44,12 @@ async def main() -> None:
     bot = Bot(token=settings.bot_token, session=session)
     dispatcher = Dispatcher(storage=MemoryStorage())
     dispatcher.include_router(router)
-    await dispatcher.start_polling(bot)
+    cleanup_task = asyncio.create_task(cleanup_loop())
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        cleanup_task.cancel()
+        await asyncio.gather(cleanup_task, return_exceptions=True)
 
 
 if __name__ == "__main__":

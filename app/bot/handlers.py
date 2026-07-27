@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -156,8 +157,8 @@ async def _answer_callback_safely(
 
 
 def _create_run_dir(user_id: int) -> Path:
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = PROJECT_ROOT / "storage" / "runs" / f"user_{user_id}" / timestamp
+    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_" + uuid.uuid4().hex[:8]
+    run_dir = PROJECT_ROOT / "storage" / "runs" / f"user_{user_id}" / run_id
     for child in ("input", "registry", "output", "logs", "errors"):
         (run_dir / child).mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -386,6 +387,12 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
 
     await message.answer("Файл получен. Обрабатываю...")
     await bot.download(document, destination=input_path)
+    logger.info(
+        "Audit action_started user_id=%s action=%s run_id=%s",
+        message.from_user.id,
+        action,
+        run_dir.name,
+    )
 
     try:
         if action == "dictionary":
@@ -435,7 +442,13 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
                 caption="Готово: court_orders.zip",
             )
     except Exception as exc:
-        logger.exception("Processing failed. run_dir=%s action=%s", run_dir, action)
+        logger.error(
+            "Audit action_failed user_id=%s action=%s run_id=%s error_type=%s",
+            message.from_user.id,
+            action,
+            run_dir.name,
+            type(exc).__name__,
+        )
         error_text = (
             str(exc)
             if action in {"court_data", "jurisdiction"} and isinstance(exc, (ValueError, FileNotFoundError))
@@ -449,6 +462,12 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
     finally:
         await state.clear()
 
+    logger.info(
+        "Audit action_completed user_id=%s action=%s run_id=%s",
+        message.from_user.id,
+        action,
+        run_dir.name,
+    )
     await _send_menu(message)
 
 

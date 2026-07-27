@@ -44,6 +44,25 @@ class CleanupStorageTests(unittest.TestCase):
             self.assertEqual(result.deleted, [old_run])
             self.assertTrue(old_run.exists())
 
+    def test_default_retention_is_24_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "runs"
+            expired = root / "user_1" / "expired"
+            current = root / "user_1" / "current"
+            expired.mkdir(parents=True)
+            current.mkdir(parents=True)
+            now = datetime(2026, 1, 20, 12, 0, 0)
+            expired_mtime = (now - timedelta(hours=25)).timestamp()
+            current_mtime = (now - timedelta(hours=23)).timestamp()
+            os.utime(expired, (expired_mtime, expired_mtime))
+            os.utime(current, (current_mtime, current_mtime))
+
+            result = cleanup_runs(root, dry_run=False, now=now)
+
+            self.assertEqual(result.deleted, [expired])
+            self.assertFalse(expired.exists())
+            self.assertTrue(current.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
