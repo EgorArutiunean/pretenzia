@@ -15,7 +15,11 @@ async def main() -> None:
     settings = load_settings(require_bot=True)
 
     logging.basicConfig(level=logging.INFO)
-    logging.info("Access mode: restricted to %d admin user(s)", len(settings.admin_ids))
+    logging.info(
+        "Access mode: restricted to %d user(s), including %d admin(s)",
+        len(settings.allowed_user_ids),
+        len(settings.admin_ids),
+    )
     session = AiohttpSession()
     if not settings.telegram_ssl_verify:
         session._connector_init["ssl"] = False

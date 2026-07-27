@@ -89,21 +89,29 @@ HELP_TEXT = (
 )
 
 
-def _admin_ids() -> set[int]:
-    return load_settings().admin_ids
+REFERENCE_ACTIONS = {"dictionary", "court_data", "jurisdiction"}
+
+
+def _is_admin(user_id: int | None) -> bool:
+    return user_id is not None and user_id in load_settings().admin_ids
 
 
 def _is_allowed(user_id: int | None) -> bool:
     if user_id is None:
         return False
-    admin_ids = _admin_ids()
-    return user_id in admin_ids
+    return user_id in load_settings().allowed_user_ids
+
+
+def _main_menu(user_id: int | None):
+    return main_menu_keyboard(is_admin=_is_admin(user_id))
 
 
 async def _deny_if_needed(message: Message) -> bool:
     if _is_allowed(message.from_user.id if message.from_user else None):
         return False
-    await message.answer("Доступ запрещён.")
+    user_id = message.from_user.id if message.from_user else None
+    suffix = f"\nВаш Telegram ID: {user_id}" if user_id is not None else ""
+    await message.answer("Доступ запрещён." + suffix)
     return True
 
 
@@ -111,6 +119,25 @@ async def _deny_callback_if_needed(callback: CallbackQuery) -> bool:
     if _is_allowed(callback.from_user.id if callback.from_user else None):
         return False
     await _answer_callback_safely(callback, "Доступ запрещён.", show_alert=True)
+    return True
+
+
+async def _deny_admin_message_if_needed(message: Message) -> bool:
+    user_id = message.from_user.id if message.from_user else None
+    if _is_admin(user_id):
+        return False
+    await message.answer("Это действие доступно только администратору.")
+    return True
+
+
+async def _deny_admin_callback_if_needed(callback: CallbackQuery) -> bool:
+    if _is_admin(callback.from_user.id if callback.from_user else None):
+        return False
+    await _answer_callback_safely(
+        callback,
+        "Это действие доступно только администратору.",
+        show_alert=True,
+    )
     return True
 
 
@@ -232,13 +259,14 @@ def _format_reference_report(
 
 
 async def _send_menu(message: Message) -> None:
-    await message.answer("Выберите действие:", reply_markup=main_menu_keyboard())
+    user_id = message.from_user.id if message.from_user else None
+    await message.answer("Выберите действие:", reply_markup=_main_menu(user_id))
 
 
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id if message.from_user else None
-    logger.info("Start from user_id=%s admin_ids=%s", user_id, sorted(_admin_ids()))
+    logger.info("Start from user_id=%s", user_id)
     if await _deny_if_needed(message):
         return
     await state.clear()
@@ -247,7 +275,7 @@ async def start(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("dictionary"))
 async def upload_dictionary(message: Message, state: FSMContext) -> None:
-    if await _deny_if_needed(message):
+    if await _deny_if_needed(message) or await _deny_admin_message_if_needed(message):
         return
     await state.update_data(action="dictionary")
     await state.set_state(DocumentFlow.waiting_for_file)
@@ -256,7 +284,7 @@ async def upload_dictionary(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("courtdata"))
 async def upload_court_data(message: Message, state: FSMContext) -> None:
-    if await _deny_if_needed(message):
+    if await _deny_if_needed(message) or await _deny_admin_message_if_needed(message):
         return
     await state.update_data(action="court_data")
     await state.set_state(DocumentFlow.waiting_for_file)
@@ -265,7 +293,7 @@ async def upload_court_data(message: Message, state: FSMContext) -> None:
 
 @router.message(Command("jurisdiction"))
 async def upload_jurisdiction(message: Message, state: FSMContext) -> None:
-    if await _deny_if_needed(message):
+    if await _deny_if_needed(message) or await _deny_admin_message_if_needed(message):
         return
     await state.update_data(action="jurisdiction")
     await state.set_state(DocumentFlow.waiting_for_file)
@@ -277,7 +305,10 @@ async def show_data_updates_menu(
     callback: CallbackQuery,
     state: FSMContext,
 ) -> None:
-    if await _deny_callback_if_needed(callback):
+    if (
+        await _deny_callback_if_needed(callback)
+        or await _deny_admin_callback_if_needed(callback)
+    ):
         return
     await state.clear()
     await callback.message.edit_text(
@@ -297,7 +328,7 @@ async def show_main_menu(
     await state.clear()
     await callback.message.edit_text(
         "Выберите действие:",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=_main_menu(callback.from_user.id if callback.from_user else None),
     )
     await _answer_callback_safely(callback)
 
@@ -307,7 +338,10 @@ async def show_help(callback: CallbackQuery, state: FSMContext) -> None:
     if await _deny_callback_if_needed(callback):
         return
     await state.clear()
-    await callback.message.answer(HELP_TEXT, reply_markup=main_menu_keyboard())
+    await callback.message.answer(
+        HELP_TEXT,
+        reply_markup=_main_menu(callback.from_user.id if callback.from_user else None),
+    )
     await _answer_callback_safely(callback)
 
 
@@ -317,6 +351,8 @@ async def choose_action(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     action = callback.data.split(":", 1)[1]
+    if action in REFERENCE_ACTIONS and await _deny_admin_callback_if_needed(callback):
+        return
     await state.update_data(action=action)
     await state.set_state(DocumentFlow.waiting_for_file)
     await callback.message.answer(ACTION_PROMPTS[action])
@@ -334,11 +370,14 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
         await state.clear()
         await message.answer("Выберите действие заново.", reply_markup=main_menu_keyboard())
         return
+    if action in REFERENCE_ACTIONS and await _deny_admin_message_if_needed(message):
+        await state.clear()
+        return
 
     document = message.document
     validation_error = _validate_document(document)
     if validation_error:
-        await message.answer(validation_error, reply_markup=main_menu_keyboard())
+        await message.answer(validation_error, reply_markup=_main_menu(message.from_user.id))
         await state.clear()
         return
 
@@ -353,7 +392,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
             target_path = await asyncio.to_thread(_install_object_addresses, input_path)
             await message.answer(
                 f"Готово: справочник адресов обновлен.\nПуть: {target_path}",
-                reply_markup=main_menu_keyboard(),
+                reply_markup=_main_menu(message.from_user.id),
             )
         elif action == "court_data":
             report, backup_created = await asyncio.to_thread(
@@ -362,7 +401,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
             )
             await message.answer(
                 _format_reference_report(report, backup_created),
-                reply_markup=main_menu_keyboard(),
+                reply_markup=_main_menu(message.from_user.id),
             )
         elif action == "jurisdiction":
             report, backup_created = await asyncio.to_thread(
@@ -371,7 +410,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
             )
             await message.answer(
                 _format_reference_report(report, backup_created),
-                reply_markup=main_menu_keyboard(),
+                reply_markup=_main_menu(message.from_user.id),
             )
         elif action == "normalize":
             result_path = await asyncio.to_thread(run_excel_to_registry, str(input_path), str(run_dir))
@@ -404,7 +443,7 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
         )
         await message.answer(
             error_text,
-            reply_markup=main_menu_keyboard(),
+            reply_markup=_main_menu(message.from_user.id),
         )
         return
     finally:

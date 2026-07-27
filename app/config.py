@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _parse_admin_ids(raw: str) -> set[int]:
+def _parse_user_ids(raw: str, variable_name: str) -> set[int]:
     result: set[int] = set()
     for item in raw.split(","):
         item = item.strip()
@@ -19,7 +19,9 @@ def _parse_admin_ids(raw: str) -> set[int]:
         try:
             result.add(int(item))
         except ValueError as exc:
-            raise RuntimeError(f"ADMIN_IDS contains a non-numeric Telegram user id: {item!r}") from exc
+            raise RuntimeError(
+                f"{variable_name} contains a non-numeric Telegram user id: {item!r}"
+            ) from exc
     return result
 
 
@@ -34,6 +36,7 @@ def _resolve_optional_path(raw: str | None) -> Path | None:
 class Settings:
     bot_token: str | None
     admin_ids: set[int]
+    user_ids: set[int]
     claim_date: str | None
     payment_deadline: str | None
     object_addresses_path: Path | None
@@ -42,13 +45,18 @@ class Settings:
     telegram_ssl_verify: bool
     max_upload_mb: int
 
+    @property
+    def allowed_user_ids(self) -> set[int]:
+        return self.admin_ids | self.user_ids
+
 
 def load_settings(*, require_bot: bool = False) -> Settings:
     load_dotenv(PROJECT_ROOT / ".env", override=False)
 
     settings = Settings(
         bot_token=os.getenv("BOT_TOKEN") or None,
-        admin_ids=_parse_admin_ids(os.getenv("ADMIN_IDS", "")),
+        admin_ids=_parse_user_ids(os.getenv("ADMIN_IDS", ""), "ADMIN_IDS"),
+        user_ids=_parse_user_ids(os.getenv("USER_IDS", ""), "USER_IDS"),
         claim_date=os.getenv("CLAIM_DATE") or None,
         payment_deadline=os.getenv("PAYMENT_DEADLINE") or None,
         object_addresses_path=_resolve_optional_path(os.getenv("OBJECT_ADDRESSES_PATH")),

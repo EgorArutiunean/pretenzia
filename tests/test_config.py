@@ -22,12 +22,15 @@ class ConfigTests(unittest.TestCase):
         env = {
             "BOT_TOKEN": "123:test",
             "ADMIN_IDS": "111, 222",
+            "USER_IDS": "222, 333",
             "MAX_UPLOAD_MB": "25",
         }
         with patch.dict(os.environ, env, clear=True):
             settings = load_settings(require_bot=True)
 
         self.assertEqual(settings.admin_ids, {111, 222})
+        self.assertEqual(settings.user_ids, {222, 333})
+        self.assertEqual(settings.allowed_user_ids, {111, 222, 333})
         self.assertEqual(settings.max_upload_mb, 25)
 
     def test_require_bot_allows_missing_object_addresses_at_startup(self) -> None:
@@ -41,6 +44,19 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings(require_bot=True)
 
         self.assertEqual(settings.admin_ids, {111})
+
+    def test_user_ids_reject_non_numeric_values(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "BOT_TOKEN": "123:test",
+                "ADMIN_IDS": "111",
+                "USER_IDS": "not-an-id",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "USER_IDS"):
+                load_settings(require_bot=True)
 
     def test_court_order_paths_support_new_and_legacy_variables(self) -> None:
         with patch.dict(

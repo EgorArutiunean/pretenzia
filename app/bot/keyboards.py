@@ -3,9 +3,8 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def main_menu_keyboard(*, is_admin: bool = True) -> InlineKeyboardMarkup:
+    rows = [
             [
                 InlineKeyboardButton(
                     text="📊 Создать реестр из ОНВ",
@@ -26,18 +25,22 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🔄 Обновление данных",
-                    callback_data="menu:data_updates",
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="ℹ️ Инструкция",
                     callback_data="action:help",
                 )
             ],
         ]
-    )
+    if is_admin:
+        rows.insert(
+            -1,
+            [
+                InlineKeyboardButton(
+                    text="🔄 Обновление данных",
+                    callback_data="menu:data_updates",
+                )
+            ],
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def data_updates_menu_keyboard() -> InlineKeyboardMarkup:
