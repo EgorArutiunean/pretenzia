@@ -33,7 +33,8 @@ copy .env.example .env
 Обязательные переменные для Telegram-бота:
 
 - `BOT_TOKEN` — токен Telegram-бота.
-- `ADMIN_IDS` — разрешенные Telegram user id через запятую. Бот не запускается без этого списка.
+- `ADMIN_IDS` — Telegram ID администраторов через запятую. Они формируют документы и обновляют справочники.
+- `USER_IDS` — Telegram ID обычных пользователей через запятую. Они могут только формировать документы.
 - `OBJECT_ADDRESSES_PATH` — путь к справочнику адресов объектов для нормализации ОНВ. Для Docker/Coolify используйте `/app/storage/object_addresses.xlsx`.
 - `COURT_ORDERS_BASE_DATA_PATH` — основная БЗ объектов, компаний и реквизитов. Для Docker/Coolify используйте `/app/storage/court_orders/base_data.xlsx`.
 - `COURT_ORDERS_JURISDICTION_PATH` — БЗ судебных участков. Для Docker/Coolify используйте `/app/storage/court_orders/jurisdiction.xlsx`.
@@ -81,16 +82,16 @@ docker compose logs -f bot
 
 ## Очистка персональных данных
 
-По умолчанию команда показывает, какие пользовательские запуски старше 14 дней будут удалены:
+Бот автоматически удаляет рабочие файлы старше 24 часов. Ручная проверка:
 
 ```powershell
-python -m app.maintenance.cleanup_storage --older-than-days 14
+python -m app.maintenance.cleanup_storage --older-than-hours 24
 ```
 
 Фактическое удаление:
 
 ```powershell
-python -m app.maintenance.cleanup_storage --older-than-days 14 --apply
+python -m app.maintenance.cleanup_storage --older-than-hours 24 --apply
 ```
 
 Запуск:
@@ -146,7 +147,8 @@ python -m app.modules.court_orders.generate_court_orders_from_registry registry_
 Пример запуска:
 
 ```powershell
-python -m app.modules.excel_normalizer.build_debt_registry_template "storage/input/onv_report.xlsx" --object-addresses object_addresses.xlsx --out storage/registry/registry.xlsx
+python -m app.modules.excel_normalizer.build_debt_registry_template "storage/input/onv_report.xlsx" --object-addresses object_addresses.xlsx --base-data storage/court_orders/base_data.xlsx --out storage/registry/registry.xlsx
 ```
 
 Если адрес для `object_code` не найден, строка не попадает в основной лист `Реестр`, а записывается в лист `Ошибки`.
+Компания, ИНН и код компании определяются по первым четырём цифрам лицевого счёта из основной БЗ.

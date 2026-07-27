@@ -143,6 +143,7 @@ class CourtOrdersGenerationTests(unittest.TestCase):
         self.assertIn("Иванов Иван", generated_text)
         self.assertIn("ООО \"ТЕСТ\"", generated_text)
         self.assertIn("9 500,00", generated_text)
+        self.assertNotRegex(generated_text, r" {2,}")
 
     def test_separate_base_and_jurisdiction_files_are_joined_by_object(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

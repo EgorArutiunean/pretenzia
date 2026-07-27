@@ -237,6 +237,7 @@ def _replace_text_in_paragraph(paragraph, replacements: dict[str, str]) -> None:
     for key, value in replacements.items():
         replaced = replaced.replace("{{ " + key + " }}", value)
         replaced = replaced.replace("{{" + key + "}}", value)
+    replaced = re.sub(r" {2,}", " ", replaced)
 
     if replaced != original:
         paragraph.runs[0].text = replaced
@@ -558,7 +559,7 @@ def build_replacements(
         "debt_period": row.debt_period,
         "debt_amount": format_money(row.debt_amount),
         "debt_amount_words": money_to_words(row.debt_amount),
-        "penalty_amount": "",
+        "penalty_amount": "__________",
         "penalty_amount_words": "",
         "total_claim_amount": format_money(total_claim_amount),
         "total_claim_amount_words": money_to_words(total_claim_amount),

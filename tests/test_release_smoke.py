@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+import re
 from zipfile import ZipFile
 
 from docx import Document
@@ -46,6 +47,7 @@ class ReleaseSmokeTests(unittest.TestCase):
         self.assertNotIn("Жилищник", generated_footer_text)
         self.assertNotIn("1077746269810", generated_footer_text)
         self.assertIn("Тестовый Должник", generated_text)
+        self.assertIsNone(re.search(r" {2,}", generated_text))
 
 
 if __name__ == "__main__":

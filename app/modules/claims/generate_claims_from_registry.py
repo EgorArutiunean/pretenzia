@@ -194,7 +194,7 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
             account_number=account_number,
             debtor_name=debtor_name,
             address=address,
-            debt_period=debt_period.replace("-", " - "),
+            debt_period=re.sub(r"\s+-\s+", " - ", debt_period),
             debt_amount=amount,
             company=str(raw_values.get("Компания") or "").strip(),
             company_inn=str(raw_values.get("ИНН компании") or "").strip(),
@@ -216,6 +216,7 @@ def _replace_text_in_paragraph(paragraph, replacements: dict[str, str]) -> None:
     for key, value in replacements.items():
         replaced = replaced.replace("{{ " + key + " }}", value)
         replaced = replaced.replace("{{" + key + "}}", value)
+    replaced = re.sub(r" {2,}", " ", replaced)
 
     if replaced != original:
         paragraph.runs[0].text = replaced

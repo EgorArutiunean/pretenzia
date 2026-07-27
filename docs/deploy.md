@@ -27,6 +27,8 @@ nano .env
 
 Put the address dictionary into persistent storage as `storage/object_addresses.xlsx`.
 For Docker/Coolify set `OBJECT_ADDRESSES_PATH=/app/storage/object_addresses.xlsx`.
+Set `ADMIN_IDS` for administrators and `USER_IDS` for regular operators. Both values
+contain comma-separated numeric Telegram IDs.
 
 Run once manually to verify the server:
 
