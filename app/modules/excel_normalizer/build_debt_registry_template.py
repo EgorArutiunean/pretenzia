@@ -28,6 +28,8 @@ from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
+from app.shared.object_data import load_object_data
+
 
 MONTHS_RU = {
     "январь": 1,
@@ -49,13 +51,11 @@ def to_decimal(value):
     if value is None or value == "":
         return Decimal("0")
     try:
-        return Decimal(str(value).replace(" ", "").replace(",", "."))
-    except (InvalidOperation, ValueError):
-        return Decimal("0")
-
-
-def money_float(value):
-    return float(to_decimal(value))
+        return Decimal(
+            str(value).replace("\u00a0", "").replace(" ", "").replace(",", ".")
+        )
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Не удалось распознать денежную сумму: {value!r}") from exc
 
 
 def parse_account_number(contract_text):
@@ -231,14 +231,17 @@ def build_registry(
     min_debt=0,
     group_by="contract",
     object_addresses_path=None,
+    base_data_path=None,
 ):
     wb = load_workbook(input_path, data_only=True)
     ws = wb[sheet_name] if sheet_name else wb.worksheets[0]
     charged_col, debt_col = detect_amount_columns(ws)
     object_address_by_code = load_object_addresses(object_addresses_path)
+    object_data_by_code = load_object_data(base_data_path) if base_data_path else {}
 
     rows = []
     errors = []
+    good_payers = []
     object_addresses = set()
 
     current_object_address = ""
@@ -250,33 +253,86 @@ def build_registry(
     current_debtor = ""
     current_periods_positive_balance = []
     current_periods_with_charge = []
+    current_source_row = 0
+    current_amount_error = ""
 
     def flush_current():
         nonlocal current_contract_text, current_account, current_contract_date
         nonlocal current_contract_debt, current_debtor
         nonlocal current_periods_positive_balance, current_periods_with_charge
+        nonlocal current_source_row, current_amount_error
 
         if not current_contract_text or not current_debtor:
             return
 
-        debt = current_contract_debt
-        if debt <= Decimal(str(min_debt)):
+        if current_amount_error:
+            errors.append({
+                "source_row": current_source_row,
+                "account_number": current_account,
+                "debtor_name": current_debtor,
+                "company": current_org,
+                "contract_text": current_contract_text,
+                "reason": current_amount_error,
+            })
             return
 
+        debt = current_contract_debt
         account = current_account
         object_code, parking_place_number = parse_account_parts(account)
+        if not object_code:
+            errors.append({
+                "source_row": current_source_row,
+                "account_number": account,
+                "debtor_name": current_debtor,
+                "company": current_org,
+                "contract_text": current_contract_text,
+                "reason": "Лицевой счёт должен состоять ровно из 8 цифр.",
+            })
+            return
+
+        object_data = object_data_by_code.get(object_code)
+        if object_data_by_code and object_data is None:
+            errors.append({
+                "source_row": current_source_row,
+                "account_number": account,
+                "debtor_name": current_debtor,
+                "company": current_org,
+                "contract_text": current_contract_text,
+                "reason": f"Код объекта {object_code} отсутствует в основной БЗ.",
+            })
+            return
+        if object_data is not None and not object_data.company:
+            errors.append({
+                "source_row": current_source_row,
+                "account_number": account,
+                "debtor_name": current_debtor,
+                "company": "",
+                "contract_text": current_contract_text,
+                "reason": f"Для кода объекта {object_code} не указана компания.",
+            })
+            return
         if object_address_by_code:
             row_object_address = object_address_by_code.get(object_code)
             if not row_object_address:
                 errors.append({
+                    "source_row": current_source_row,
                     "account_number": account,
                     "debtor_name": current_debtor,
+                    "company": object_data.company if object_data else current_org,
                     "contract_text": current_contract_text,
                     "reason": f"Не найден адрес объекта для кода {object_code or '----'}",
                 })
                 return
         else:
-            row_object_address = object_address or current_object_address
+            row_object_address = (
+                object_data.object_address
+                if object_data is not None
+                else object_address or current_object_address
+            )
+
+        organization = object_data.company if object_data is not None else current_org
+        company_inn = object_data.inn if object_data is not None else ""
+        company_code = object_data.company_code if object_data is not None else ""
 
         # Основное правило периода:
         # берём месяцы, где долг на конец периода положительный.
@@ -285,8 +341,11 @@ def build_registry(
         if row_object_address:
             object_addresses.add(row_object_address)
 
-        rows.append({
-            "organization": current_org,
+        normalized_row = {
+            "source_row": current_source_row,
+            "organization": organization,
+            "company_inn": company_inn,
+            "company_code": company_code,
             "account_number": account,
             "contract_text": current_contract_text,
             "contract_date": current_contract_date,
@@ -295,8 +354,14 @@ def build_registry(
             "parking_place_number": parking_place_number,
             "full_object_address": normalize_object_address(row_object_address, parking_place_number),
             "debt_period": format_period_range(period_source),
-            "debt_amount": float(debt),
-        })
+            "debt_amount": debt,
+        }
+        if debt <= Decimal("0"):
+            good_payers.append(normalized_row)
+            return
+        if debt <= Decimal(str(min_debt)):
+            return
+        rows.append(normalized_row)
 
     for r in range(1, ws.max_row + 1):
         value = ws.cell(r, 1).value
@@ -305,11 +370,15 @@ def build_registry(
 
         value = str(value).strip()
         level = ws.row_dimensions[r].outlineLevel
-        debt_end = to_decimal(ws.cell(r, debt_col).value)
-        charged = to_decimal(ws.cell(r, charged_col).value)
         period_date = parse_period(value)
 
         if period_date and current_contract_text:
+            try:
+                debt_end = to_decimal(ws.cell(r, debt_col).value)
+                charged = to_decimal(ws.cell(r, charged_col).value)
+            except ValueError as exc:
+                current_amount_error = f"Строка {r}: {exc}"
+                continue
             if charged != 0:
                 current_periods_with_charge.append(period_date)
             if debt_end > 0:
@@ -322,7 +391,13 @@ def build_registry(
             current_contract_text = value
             current_account = parse_account_number(value)
             current_contract_date = parse_contract_date(value)
-            current_contract_debt = debt_end
+            current_source_row = r
+            current_amount_error = ""
+            try:
+                current_contract_debt = to_decimal(ws.cell(r, debt_col).value)
+            except ValueError as exc:
+                current_contract_debt = Decimal("0")
+                current_amount_error = f"Строка {r}: {exc}"
             current_debtor = ""
             current_periods_positive_balance = []
             current_periods_with_charge = []
@@ -330,8 +405,14 @@ def build_registry(
 
         if current_contract_text and not current_debtor and level > 0:
             current_debtor = value
-            if current_contract_debt == 0 and debt_end != 0:
-                current_contract_debt = debt_end
+            if current_contract_debt == 0 and not current_amount_error:
+                try:
+                    debt_end = to_decimal(ws.cell(r, debt_col).value)
+                except ValueError as exc:
+                    current_amount_error = f"Строка {r}: {exc}"
+                else:
+                    if debt_end != 0:
+                        current_contract_debt = debt_end
             continue
 
         if level == 1 and not current_contract_text:
@@ -346,13 +427,36 @@ def build_registry(
 
     flush_current()
 
+    unique_rows = []
+    seen_rows = set()
+    for row in rows:
+        key = tuple(
+            row[field]
+            for field in (
+                "organization",
+                "company_inn",
+                "company_code",
+                "account_number",
+                "contract_text",
+                "debtor_name",
+                "full_object_address",
+                "debt_period",
+                "debt_amount",
+            )
+        )
+        if key in seen_rows:
+            continue
+        seen_rows.add(key)
+        unique_rows.append(row)
+    rows = unique_rows
+
     if group_by == "account":
         grouped = {}
         for row in rows:
             key = row["account_number"]
             if key not in grouped:
                 grouped[key] = row.copy()
-                grouped[key]["debt_amount"] = 0.0
+                grouped[key]["debt_amount"] = Decimal("0")
                 grouped[key]["_period_dates"] = []
                 grouped[key]["contract_text"] = []
             grouped[key]["debt_amount"] += row["debt_amount"]
@@ -384,6 +488,9 @@ def build_registry(
         "Адрес",
         "Период задолженности",
         "Сумма долга",
+        "Компания",
+        "ИНН компании",
+        "Код компании",
     ]
 
     out_ws.append(headers)
@@ -395,6 +502,9 @@ def build_registry(
             row["full_object_address"],
             row["debt_period"].replace(" — ", "-"),
             row["debt_amount"],
+            row["organization"],
+            row["company_inn"],
+            row["company_code"],
         ])
 
     # Оформление
@@ -420,6 +530,9 @@ def build_registry(
         3: 55,
         4: 24,
         5: 16,
+        6: 34,
+        7: 16,
+        8: 16,
     }.items():
         out_ws.column_dimensions[get_column_letter(col_idx)].width = width
 
@@ -444,6 +557,8 @@ def build_registry(
     summary.append(["Группировка", group_by])
     if object_addresses_path:
         summary.append(["Справочник адресов", object_addresses_path])
+    if base_data_path:
+        summary.append(["Основная БЗ", base_data_path])
 
     for cell in summary[1]:
         cell.fill = header_fill
@@ -462,11 +577,15 @@ def build_registry(
             cell.number_format = '#,##0.00'
 
     errors_ws = out_wb.create_sheet("Ошибки")
-    errors_ws.append(["Лицевой счет", "ФИО", "Договор", "Причина"])
+    errors_ws.append(
+        ["Строка ОНВ", "Лицевой счет", "ФИО", "Компания", "Договор", "Причина"]
+    )
     for error in errors:
         errors_ws.append([
+            error.get("source_row"),
             error["account_number"],
             error["debtor_name"],
+            error.get("company", ""),
             error["contract_text"],
             error["reason"],
         ])
@@ -482,8 +601,43 @@ def build_registry(
             cell.border = border
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-    for col_idx, width in {1: 16, 2: 34, 3: 32, 4: 42}.items():
+    for col_idx, width in {1: 12, 2: 16, 3: 34, 4: 34, 5: 32, 6: 55}.items():
         errors_ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    good_ws = out_wb.create_sheet("Добросовестные плательщики")
+    good_ws.append(
+        [
+            "Строка ОНВ",
+            "Лицевой счет",
+            "ФИО",
+            "Компания",
+            "Сумма долга",
+            "Причина",
+        ]
+    )
+    for row in good_payers:
+        good_ws.append(
+            [
+                row["source_row"],
+                row["account_number"],
+                row["debtor_name"],
+                row["organization"],
+                row["debt_amount"],
+                "Задолженность меньше или равна нулю.",
+            ]
+        )
+    for cell in good_ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = border
+    for row in good_ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.border = border
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for col_idx, width in {1: 12, 2: 16, 3: 34, 4: 34, 5: 16, 6: 42}.items():
+        good_ws.column_dimensions[get_column_letter(col_idx)].width = width
+    for cell in good_ws["E"][1:]:
+        cell.number_format = '#,##0.00'
 
     out_wb.save(output_path)
     return rows
@@ -494,6 +648,7 @@ def main():
     parser.add_argument("input", help="Путь к входному Excel-файлу из 1С")
     parser.add_argument("--out", default="debt_registry.xlsx", help="Путь к выходному Excel-файлу")
     parser.add_argument("--object-addresses", default=None, help="Справочник адресов объектов .xlsx или .json: object_code -> object_address")
+    parser.add_argument("--base-data", default=None, help="Основная БЗ объектов и компаний .xlsx")
     parser.add_argument("--object-address", default=None, help="Адрес объекта / паркинга. Если не указан, берётся из отчёта.")
     parser.add_argument("--sheet", default=None, help="Имя листа. Если не указано, берётся первый лист.")
     parser.add_argument("--min-debt", type=float, default=0, help="Минимальная сумма долга для включения в реестр")
@@ -514,6 +669,7 @@ def main():
         min_debt=args.min_debt,
         group_by=args.group_by,
         object_addresses_path=args.object_addresses,
+        base_data_path=args.base_data,
     )
 
     print(f"Готово: {args.out}")

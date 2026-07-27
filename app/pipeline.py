@@ -53,6 +53,12 @@ def run_excel_to_registry(input_excel_path: str, run_dir: str) -> str:
         input_path=input_excel_path,
         output_path=str(output_path),
         object_addresses_path=str(object_addresses) if object_addresses else None,
+        base_data_path=(
+            str(settings.court_orders_base_data_path)
+            if settings.court_orders_base_data_path
+            and settings.court_orders_base_data_path.exists()
+            else None
+        ),
     )
     return str(output_path)
 
