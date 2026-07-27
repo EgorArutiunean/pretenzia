@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.pipeline import run_excel_to_registry
+from app.config import PROJECT_ROOT
+from app.pipeline import run_excel_to_registry, run_registry_to_claims
 
 
 class PipelineTests(unittest.TestCase):
@@ -37,6 +38,25 @@ class PipelineTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 with self.assertRaisesRegex(ValueError, "OBJECT_ADDRESSES_PATH must point"):
                     run_excel_to_registry(str(input_path), str(run_dir))
+
+    def test_claims_reject_configured_missing_base_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            with patch.dict(
+                os.environ,
+                {
+                    "COURT_ORDERS_BASE_DATA_PATH": str(temp / "missing_base.xlsx"),
+                },
+                clear=True,
+            ):
+                with self.assertRaisesRegex(
+                    FileNotFoundError,
+                    "COURT_ORDERS_BASE_DATA_PATH",
+                ):
+                    run_registry_to_claims(
+                        str(PROJECT_ROOT / "registry_template.xlsx"),
+                        str(temp / "run"),
+                    )
 
 
 if __name__ == "__main__":

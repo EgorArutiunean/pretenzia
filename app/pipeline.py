@@ -28,6 +28,22 @@ def _default_payment_deadline() -> str:
     return (date.today() + timedelta(days=30)).strftime("%d.%m.%Y")
 
 
+def _resolve_optional_base_data() -> Path | None:
+    settings = load_settings()
+    configured = settings.court_orders_base_data_path
+    if configured is not None:
+        if not configured.exists():
+            raise FileNotFoundError(
+                f"COURT_ORDERS_BASE_DATA_PATH does not exist: {configured}"
+            )
+        if not configured.is_file():
+            raise ValueError(
+                f"COURT_ORDERS_BASE_DATA_PATH must point to an .xlsx file: {configured}"
+            )
+        return configured
+    return DEFAULT_COURT_ORDERS_BASE_DATA if DEFAULT_COURT_ORDERS_BASE_DATA.exists() else None
+
+
 def run_excel_to_registry(input_excel_path: str, run_dir: str) -> str:
     """
     ОНВ из 1С -> registry.xlsx.
@@ -49,16 +65,12 @@ def run_excel_to_registry(input_excel_path: str, run_dir: str) -> str:
     elif not object_addresses.is_file():
         raise ValueError(f"OBJECT_ADDRESSES_PATH must point to an .xlsx or .json file: {object_addresses}")
 
+    base_data = _resolve_optional_base_data()
     build_registry(
         input_path=input_excel_path,
         output_path=str(output_path),
         object_addresses_path=str(object_addresses) if object_addresses else None,
-        base_data_path=(
-            str(settings.court_orders_base_data_path)
-            if settings.court_orders_base_data_path
-            and settings.court_orders_base_data_path.exists()
-            else None
-        ),
+        base_data_path=str(base_data) if base_data else None,
     )
     return str(output_path)
 
@@ -73,6 +85,7 @@ def run_registry_to_claims(registry_path: str, run_dir: str) -> str:
     run_path = Path(run_dir)
     output_dir = _ensure_dir(run_path / "output")
     output_zip_path = output_dir / "claims.zip"
+    base_data = _resolve_optional_base_data()
 
     generate_claims_zip(
         registry_path=registry_path,
@@ -80,12 +93,7 @@ def run_registry_to_claims(registry_path: str, run_dir: str) -> str:
         output_zip_path=str(output_zip_path),
         claim_date=settings.claim_date or _default_claim_date(),
         payment_deadline=settings.payment_deadline or _default_payment_deadline(),
-        base_data_path=(
-            str(settings.court_orders_base_data_path)
-            if settings.court_orders_base_data_path
-            and settings.court_orders_base_data_path.exists()
-            else None
-        ),
+        base_data_path=str(base_data) if base_data else None,
     )
     return str(output_zip_path)
 
