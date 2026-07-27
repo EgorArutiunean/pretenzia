@@ -80,6 +80,12 @@ def run_registry_to_claims(registry_path: str, run_dir: str) -> str:
         output_zip_path=str(output_zip_path),
         claim_date=settings.claim_date or _default_claim_date(),
         payment_deadline=settings.payment_deadline or _default_payment_deadline(),
+        base_data_path=(
+            str(settings.court_orders_base_data_path)
+            if settings.court_orders_base_data_path
+            and settings.court_orders_base_data_path.exists()
+            else None
+        ),
     )
     return str(output_zip_path)
 

@@ -16,6 +16,7 @@ from openpyxl import load_workbook
 
 from app.shared.file_utils import safe_filename
 from app.shared.money_to_words import money_to_words
+from app.shared.object_data import ObjectData, load_object_data
 from app.shared.zip_utils import create_zip
 
 
@@ -46,6 +47,9 @@ class ClaimRow:
     address: str
     debt_period: str
     debt_amount: Decimal
+    company: str = ""
+    company_inn: str = ""
+    company_code: str = ""
 
     @property
     def parking_place_number(self) -> str:
@@ -139,6 +143,16 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
             + (", ".join(visible_headers) if visible_headers else "нет")
         )
 
+    optional_columns = {
+        normalize_header("Компания"): "Компания",
+        normalize_header("ИНН компании"): "ИНН компании",
+        normalize_header("Код компании"): "Код компании",
+    }
+    for col_idx in range(1, ws.max_column + 1):
+        canonical = optional_columns.get(normalize_header(ws.cell(header_row, col_idx).value))
+        if canonical:
+            columns[canonical] = col_idx
+
     rows: list[ClaimRow] = []
     for row_idx in range(header_row + 1, ws.max_row + 1):
         raw_values = {
@@ -152,13 +166,39 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
         if amount <= 0:
             continue
 
+        account_number = str(raw_values["Лицевой счет"] or "").strip()
+        debtor_name = str(raw_values["ФИО"] or "").strip()
+        address = str(raw_values["Адрес"] or "").strip()
+        debt_period = str(raw_values["Период задолженности"] or "").strip()
+        if not re.fullmatch(r"\d{8}", account_number):
+            raise ValueError(
+                f"Строка {row_idx}: лицевой счёт должен состоять ровно из 8 цифр."
+            )
+        missing = [
+            label
+            for label, value in (
+                ("ФИО", debtor_name),
+                ("Адрес", address),
+                ("Период задолженности", debt_period),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Строка {row_idx}: не заполнены обязательные поля: "
+                + ", ".join(missing)
+            )
+
         rows.append(
             ClaimRow(
-                account_number=str(raw_values["Лицевой счет"] or "").strip(),
-                debtor_name=str(raw_values["ФИО"] or "").strip(),
-                address=str(raw_values["Адрес"] or "").strip(),
-                debt_period=str(raw_values["Период задолженности"] or "").strip().replace("-", " - "),
+                account_number=account_number,
+                debtor_name=debtor_name,
+                address=address,
+                debt_period=debt_period.replace("-", " - "),
                 debt_amount=amount,
+                company=str(raw_values.get("Компания") or "").strip(),
+                company_inn=str(raw_values.get("ИНН компании") or "").strip(),
+                company_code=str(raw_values.get("Код компании") or "").strip(),
             )
         )
 
@@ -219,8 +259,32 @@ def _remove_deprecated_claim_elements(doc: Document) -> None:
                 table._element.getparent().remove(table._element)
 
 
-def build_replacements(row: ClaimRow, claim_date: str, payment_deadline: str) -> dict[str, str]:
+def build_replacements(
+    row: ClaimRow,
+    claim_date: str,
+    payment_deadline: str,
+    object_data: ObjectData | None = None,
+) -> dict[str, str]:
     context = dict(DEFAULT_CONTEXT)
+    if object_data is not None:
+        context.update(
+            {
+                "company_name": object_data.company,
+                "company_ogrn": object_data.ogrn,
+                "company_inn": object_data.inn,
+                "company_kpp": object_data.kpp,
+                "company_post_address": object_data.legal_address,
+                "company_email": "",
+                "director_name": object_data.director_name,
+            }
+        )
+    elif row.company:
+        context.update(
+            {
+                "company_name": row.company,
+                "company_inn": row.company_inn,
+            }
+        )
     context.update(
         {
             "account_number": row.account_number,
@@ -248,6 +312,8 @@ def generate_claims_zip_result(
     output_zip_path: str,
     claim_date: str,
     payment_deadline: str,
+    *,
+    base_data_path: str | None = None,
 ) -> ClaimsGenerationResult:
     registry = Path(registry_path)
     template = Path(template_path)
@@ -259,6 +325,7 @@ def generate_claims_zip_result(
     rows = read_registry(registry)
     if not rows:
         raise ValueError("В реестре нет строк с положительной суммой долга для генерации претензий.")
+    object_data_by_code = load_object_data(base_data_path) if base_data_path else {}
 
     temp_root = _project_root() / "storage" / "temp"
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -270,23 +337,49 @@ def generate_claims_zip_result(
         used_names: set[str] = set()
 
         for index, row in enumerate(rows, start=1):
+            object_code = row.account_number[:4]
+            object_data = object_data_by_code.get(object_code)
+            if object_data_by_code and object_data is None:
+                raise ValueError(
+                    f"Для лицевого счёта {row.account_number} код объекта "
+                    f"{object_code} отсутствует в основной БЗ."
+                )
+            if object_data is not None and row.company:
+                if normalize_header(object_data.company) != normalize_header(row.company):
+                    raise ValueError(
+                        f"Для лицевого счёта {row.account_number} компания в реестре "
+                        "не совпадает с основной БЗ."
+                    )
+
             doc = Document(str(template))
-            _replace_in_doc(doc, build_replacements(row, claim_date, payment_deadline))
+            _replace_in_doc(
+                doc,
+                build_replacements(row, claim_date, payment_deadline, object_data),
+            )
             _remove_deprecated_claim_elements(doc)
 
             base_name = safe_filename(f"{index:03d}_{row.account_number}_{row.debtor_name}")
             file_name = base_name + ".docx"
+            company_name = (
+                object_data.company
+                if object_data is not None
+                else row.company or DEFAULT_CONTEXT["company_name"]
+            )
+            company_dir = temp_dir / safe_filename(company_name)
+            company_dir.mkdir(parents=True, exist_ok=True)
+            archive_name = f"{company_dir.name}/{file_name}".lower()
             counter = 2
-            while file_name.lower() in used_names:
+            while archive_name in used_names:
                 file_name = f"{base_name}_{counter}.docx"
+                archive_name = f"{company_dir.name}/{file_name}".lower()
                 counter += 1
-            used_names.add(file_name.lower())
+            used_names.add(archive_name)
 
-            file_path = temp_dir / file_name
+            file_path = company_dir / file_name
             doc.save(file_path)
             generated_files.append(file_path)
 
-        create_zip(generated_files, output_zip)
+        create_zip(generated_files, output_zip, base_dir=temp_dir)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -303,6 +396,8 @@ def generate_claims_zip(
     output_zip_path: str,
     claim_date: str,
     payment_deadline: str,
+    *,
+    base_data_path: str | None = None,
 ) -> str:
     return generate_claims_zip_result(
         registry_path=registry_path,
@@ -310,6 +405,7 @@ def generate_claims_zip(
         output_zip_path=output_zip_path,
         claim_date=claim_date,
         payment_deadline=payment_deadline,
+        base_data_path=base_data_path,
     ).zip_path
 
 
@@ -323,6 +419,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--template", default="app/modules/claims/claim_template.docx", help="Word-шаблон претензии")
     parser.add_argument("--claim-date", default=today.strftime("%d.%m.%Y"), help="Дата претензии")
     parser.add_argument("--payment-deadline", default=default_deadline.strftime("%d.%m.%Y"), help="Срок оплаты")
+    parser.add_argument("--base-data", default=None, help="Основная БЗ объектов и компаний")
     return parser.parse_args()
 
 
@@ -335,6 +432,7 @@ def main() -> None:
             output_zip_path=args.out,
             claim_date=args.claim_date,
             payment_deadline=args.payment_deadline,
+            base_data_path=args.base_data,
         )
     except (FileNotFoundError, ValueError) as exc:
         print(f"Ошибка: {exc}", file=sys.stderr)
