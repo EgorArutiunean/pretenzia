@@ -211,6 +211,47 @@ class CourtOrdersGenerationTests(unittest.TestCase):
         self.assertEqual(result.skipped_count, 1)
         self.assertEqual(names, ["errors.xlsx"])
 
+    def test_court_report_tracks_duplicates_and_good_payers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            registry_path = temp / "registry.xlsx"
+            static_path = temp / "static.xlsx"
+            template_path = temp / "template.docx"
+            output_zip_path = temp / "court_orders.zip"
+            valid_row = [
+                "12970001",
+                "Иванов Иван",
+                "Москва",
+                "01.01.2026 - 31.01.2026",
+                10000,
+            ]
+            _build_registry(
+                registry_path,
+                [
+                    valid_row,
+                    valid_row,
+                    ["12970002", "Петров Петр", "Москва", "01.01.2026", 0],
+                ],
+            )
+            _build_static_data(static_path)
+            _build_template(template_path)
+
+            result = generate_court_orders_zip_result(
+                registry_path=str(registry_path),
+                template_path=str(template_path),
+                static_data_path=str(static_path),
+                output_zip_path=str(output_zip_path),
+            )
+            with ZipFile(output_zip_path) as archive:
+                archive.extract("errors.xlsx", temp)
+            report = load_workbook(temp / "errors.xlsx", data_only=True)
+
+        self.assertEqual(result.documents_count, 1)
+        self.assertEqual(result.skipped_count, 2)
+        self.assertIn("Итоги", report.sheetnames)
+        self.assertIn("Добросовестные плательщики", report.sheetnames)
+        self.assertIn("Дубли", report.sheetnames)
+
 
 if __name__ == "__main__":
     unittest.main()

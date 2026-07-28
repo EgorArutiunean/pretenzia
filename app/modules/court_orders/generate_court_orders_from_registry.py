@@ -16,6 +16,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
 from app.modules.claims.generate_claims_from_registry import (
+    ClaimIssue,
     ClaimRow,
     format_money,
     normalize_header as normalize_registry_header,
@@ -616,9 +617,31 @@ def _debtor_data_warning(debtor_data: dict[str, Any]) -> str | None:
     return "Не заполнены данные должника: " + ", ".join(missing)
 
 
-def _write_issues_workbook(issues: list[GenerationIssue], output_path: Path) -> Path:
+def _write_issues_workbook(
+    issues: list[GenerationIssue],
+    output_path: Path,
+    *,
+    documents_count: int,
+    total_amount: Decimal,
+) -> Path:
     workbook = Workbook()
-    workbook.remove(workbook.active)
+    summary = workbook.active
+    summary.title = "Итоги"
+    summary.append(["Показатель", "Значение"])
+    summary.append(["Создано заявлений", documents_count])
+    summary.append(["Пропущено строк", sum(issue.severity != "warning" for issue in issues)])
+    summary.append(["Ошибок", sum(issue.severity == "error" for issue in issues)])
+    summary.append(["Предупреждений", sum(issue.severity == "warning" for issue in issues)])
+    summary.append(["Не сформировано", sum(issue.severity == "not_generated" for issue in issues)])
+    summary.append(["Добросовестных плательщиков", sum(issue.severity == "good_payer" for issue in issues)])
+    summary.append(["Дублей", sum(issue.severity == "duplicate" for issue in issues)])
+    summary.append(["Сумма сформированных заявлений", total_amount])
+    for cell in summary[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F4E78")
+    summary.column_dimensions["A"].width = 40
+    summary.column_dimensions["B"].width = 22
+    summary["B9"].number_format = "#,##0.00"
     headers = [
         "Строка реестра",
         "Лицевой счет",
@@ -634,6 +657,8 @@ def _write_issues_workbook(issues: list[GenerationIssue], output_path: Path) -> 
         ("error", "Ошибки"),
         ("warning", "Предупреждения"),
         ("not_generated", "Не сформированы"),
+        ("good_payer", "Добросовестные плательщики"),
+        ("duplicate", "Дубли"),
     ):
         rows = [issue for issue in issues if issue.severity == severity]
         if not rows:
@@ -697,8 +722,9 @@ def generate_court_orders_zip_result(
     if not template.exists():
         raise FileNotFoundError(f"Word-шаблон судебного заявления не найден: {template}")
 
-    rows = read_registry(registry_path)
-    if not rows:
+    registry_issues: list[ClaimIssue] = []
+    rows = read_registry(registry_path, issues=registry_issues)
+    if not rows and not registry_issues:
         raise ValueError("В реестре нет строк с положительной суммой долга для генерации заявлений.")
 
     base_by_object = load_base_data(base_data_path)
@@ -729,9 +755,21 @@ def generate_court_orders_zip_result(
     temp_dir.mkdir(parents=True, exist_ok=False)
 
     generated_files: list[Path] = []
-    issues: list[GenerationIssue] = []
+    issues: list[GenerationIssue] = [
+        GenerationIssue(
+            severity=issue.category,
+            account_number=issue.account_number,
+            debtor_name=issue.debtor_name,
+            object_code=object_code_from_account(issue.account_number),
+            reason=issue.reason,
+            source_row=issue.source_row,
+            company=issue.company,
+            source_amount=issue.debt_amount,
+        )
+        for issue in registry_issues
+    ]
     used_names: set[str] = set()
-    skipped_count = 0
+    skipped_count = len(registry_issues)
     total_debt_amount = Decimal("0.00")
     effective_date = application_date or date.today().strftime("%d.%m.%Y")
 
@@ -909,7 +947,17 @@ def generate_court_orders_zip_result(
             )
 
         if issues:
-            generated_files.append(_write_issues_workbook(issues, temp_dir / "errors.xlsx"))
+            generated_files.append(
+                _write_issues_workbook(
+                    issues,
+                    temp_dir / "errors.xlsx",
+                    documents_count=sum(
+                        path.suffix.lower() == ".docx"
+                        for path in generated_files
+                    ),
+                    total_amount=total_debt_amount,
+                )
+            )
         create_zip(generated_files, output_zip, base_dir=temp_dir)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

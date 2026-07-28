@@ -280,7 +280,7 @@ class ClaimsGenerationTests(unittest.TestCase):
         self.assertIn("errors.xlsx", names)
         self.assertEqual(
             set(issues.sheetnames),
-            {"Ошибки", "Добросовестные плательщики", "Дубли"},
+            {"Итоги", "Ошибки", "Добросовестные плательщики", "Дубли"},
         )
 
 

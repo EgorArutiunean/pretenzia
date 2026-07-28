@@ -395,9 +395,31 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _write_claim_issues(issues: list[ClaimIssue], output_path: Path) -> Path:
+def _write_claim_issues(
+    issues: list[ClaimIssue],
+    output_path: Path,
+    *,
+    documents_count: int,
+    total_amount: Decimal,
+) -> Path:
     workbook = Workbook()
-    workbook.remove(workbook.active)
+    summary = workbook.active
+    summary.title = "Итоги"
+    summary.append(["Показатель", "Значение"])
+    summary.append(["Создано претензий", documents_count])
+    summary.append(["Пропущено строк", len(issues)])
+    summary.append(["Ошибок", sum(issue.category == "error" for issue in issues)])
+    summary.append(
+        ["Добросовестных плательщиков", sum(issue.category == "good_payer" for issue in issues)]
+    )
+    summary.append(["Дублей", sum(issue.category == "duplicate" for issue in issues)])
+    summary.append(["Сумма сформированных претензий", total_amount])
+    for cell in summary[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F4E78")
+    summary.column_dimensions["A"].width = 38
+    summary.column_dimensions["B"].width = 22
+    summary["B7"].number_format = "#,##0.00"
     headers = [
         "Строка реестра",
         "Лицевой счет",
@@ -471,6 +493,7 @@ def generate_claims_zip_result(
     try:
         generated_files: list[Path] = []
         used_names: set[str] = set()
+        successful_amount = Decimal("0.00")
 
         for index, row in enumerate(rows, start=1):
             object_code = row.account_number[:4]
@@ -544,10 +567,19 @@ def generate_claims_zip_result(
             file_path = company_dir / file_name
             doc.save(file_path)
             generated_files.append(file_path)
+            successful_amount += row.debt_amount
 
         if issues:
             generated_files.append(
-                _write_claim_issues(issues, temp_dir / "errors.xlsx")
+                _write_claim_issues(
+                    issues,
+                    temp_dir / "errors.xlsx",
+                    documents_count=sum(
+                        path.suffix.lower() == ".docx"
+                        for path in generated_files
+                    ),
+                    total_amount=successful_amount,
+                )
             )
         create_zip(generated_files, output_zip, base_dir=temp_dir)
     finally:
@@ -556,18 +588,7 @@ def generate_claims_zip_result(
     return ClaimsGenerationResult(
         zip_path=str(output_zip),
         documents_count=sum(path.suffix.lower() == ".docx" for path in generated_files),
-        total_amount=sum(
-            (
-                row.debt_amount
-                for row in rows
-                if not any(
-                    issue.category == "error"
-                    and issue.source_row == row.source_row
-                    for issue in issues
-                )
-            ),
-            Decimal("0.00"),
-        ).quantize(Decimal("0.01")),
+        total_amount=successful_amount.quantize(Decimal("0.01")),
         skipped_count=len(issues),
         errors_count=sum(issue.category == "error" for issue in issues),
     )
