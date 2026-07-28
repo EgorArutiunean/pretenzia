@@ -172,6 +172,31 @@ class CourtOrdersGenerationTests(unittest.TestCase):
         self.assertEqual(base_report.warning_counts, {})
         self.assertEqual(jurisdiction_report.warning_counts, {"без адреса суда": 1})
 
+    def test_jurisdiction_address_can_follow_court_in_same_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            static_path = Path(temp_dir) / "static.xlsx"
+            _build_static_data(static_path)
+            workbook = load_workbook(static_path)
+            worksheet = workbook.active
+            worksheet["G2"] = (
+                "Мировому судье судебного участка № 145\n"
+                "119618, г. Москва, ул. Тестовая, д. 1"
+            )
+            workbook.save(static_path)
+
+            data = load_jurisdiction_data(static_path)
+            report = validate_jurisdiction_data(static_path)
+
+        self.assertEqual(
+            data["1297"].court,
+            "Мировому судье судебного участка № 145",
+        )
+        self.assertEqual(
+            data["1297"].court_address,
+            "119618, г. Москва, ул. Тестовая, д. 1",
+        )
+        self.assertEqual(report.warning_counts, {})
+
     def test_duplicate_object_code_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             static_path = Path(temp_dir) / "static.xlsx"

@@ -389,16 +389,31 @@ def load_jurisdiction_data(
                 f"строки {row_by_object[object_code]} и {row_idx}."
             )
 
+        court, embedded_court_address = _split_court_and_address(
+            values.get("Подсудность")
+        )
+        explicit_court_address = str(values.get("Адрес суда") or "").strip()
         by_object[object_code] = CourtJurisdiction(
             object_code=object_code,
-            court=str(values.get("Подсудность") or "").strip(),
-            court_address=str(values.get("Адрес суда") or "").strip(),
+            court=court,
+            court_address=explicit_court_address or embedded_court_address,
         )
         row_by_object[object_code] = row_idx
 
     if not by_object:
         raise ValueError("В БЗ подсудности нет строк с кодами объектов.")
     return by_object
+
+
+def _split_court_and_address(value: Any) -> tuple[str, str]:
+    lines = [
+        line.strip()
+        for line in str(value or "").splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        return "", ""
+    return lines[0], "\n".join(lines[1:])
 
 
 def validate_base_data(base_data_path: str | Path) -> WorkbookValidationReport:
