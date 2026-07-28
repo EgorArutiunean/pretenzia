@@ -46,6 +46,7 @@ REQUIRED_JURISDICTION_COLUMNS = [
 
 COURT_ORDER_FONT_NAME = "Times New Roman"
 COURT_ORDER_FONT_SIZE_PT = 12
+LIMITATION_PERIOD_MONTHS = 36
 
 COLUMN_ALIASES = {
     "номер объекта": "Номер объекта",
@@ -555,7 +556,8 @@ def calculate_court_debt(
     if monthly_rate <= 0 or monthly_rate != monthly_rate.to_integral_value():
         raise ValueError("Ставка должна быть положительным целым числом.")
     full_months = int((source_debt / monthly_rate).to_integral_value(rounding=ROUND_FLOOR))
-    return full_months, monthly_rate * full_months
+    claimable_months = min(full_months, LIMITATION_PERIOD_MONTHS)
+    return claimable_months, monthly_rate * claimable_months
 
 
 def calculate_court_period(period_text: str, full_months: int) -> str:
@@ -883,6 +885,24 @@ def generate_court_orders_zip_result(
                 row.debt_amount,
                 static_data.monthly_rate,
             )
+            limitation_cap = static_data.monthly_rate * LIMITATION_PERIOD_MONTHS
+            if row.debt_amount > limitation_cap:
+                issues.append(
+                    GenerationIssue(
+                        severity="warning",
+                        account_number=row.account_number,
+                        debtor_name=row.debtor_name,
+                        object_code=object_code,
+                        reason=(
+                            "Сумма задолженности ограничена сроком исковой "
+                            f"давности {LIMITATION_PERIOD_MONTHS} месяцев."
+                        ),
+                        source_row=row.source_row,
+                        company=static_data.company,
+                        source_amount=row.debt_amount,
+                        calculated_amount=court_debt,
+                    )
+                )
             exclusion_reason = court_order_exclusion_reason(full_months, court_debt)
             if exclusion_reason:
                 issues.append(

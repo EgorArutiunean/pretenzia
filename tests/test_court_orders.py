@@ -97,6 +97,16 @@ class CourtOrdersGenerationTests(unittest.TestCase):
             "01.10.2025 - 01.06.2026",
         )
 
+    def test_court_debt_is_limited_to_36_months(self) -> None:
+        months, amount = calculate_court_debt(Decimal("50000"), Decimal("1000"))
+
+        self.assertEqual(months, 36)
+        self.assertEqual(amount, Decimal("36000"))
+        self.assertEqual(
+            calculate_court_period("01.01.2023 - 30.06.2026", months),
+            "01.07.2023 - 01.06.2026",
+        )
+
     def test_court_order_amount_boundaries_are_inclusive(self) -> None:
         self.assertIsNotNone(court_order_exclusion_reason(4, Decimal("4999")))
         self.assertIsNone(court_order_exclusion_reason(5, Decimal("5000")))
