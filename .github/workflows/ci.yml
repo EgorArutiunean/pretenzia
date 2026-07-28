@@ -23,23 +23,22 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
       - name: Compile modules
-        run: |
-          python -m py_compile \
-            app/config.py \
-            app/main.py \
-            app/pipeline.py \
-            app/bot/__main__.py \
-            app/bot/handlers.py \
-            app/bot/keyboards.py \
-            app/modules/claims/generate_claims_from_registry.py \
-            app/modules/excel_normalizer/build_debt_registry_template.py \
-            app/shared/money_to_words.py \
-            app/shared/file_utils.py \
-            app/shared/zip_utils.py \
-            app/maintenance/cleanup_storage.py
+        run: python -m compileall -q app tests
 
       - name: Run tests
         run: python -m unittest discover -v
+
+      - name: Check dependency consistency
+        run: python -m pip check
+
+      - name: Check private runtime files are not tracked
+        shell: bash
+        run: |
+          test ! -f .env
+          if git ls-files 'storage/**' | grep -E '\.(xlsx|xlsm|json|zip|docx)$'; then
+            echo "Private runtime artifacts must not be tracked under storage/"
+            exit 1
+          fi
 
       - name: Run CLI smoke check
         run: python -m app.main registry_template.xlsx --out storage/output/claims.zip
