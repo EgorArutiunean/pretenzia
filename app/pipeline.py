@@ -75,7 +75,13 @@ def run_excel_to_registry(input_excel_path: str, run_dir: str) -> str:
     return str(output_path)
 
 
-def run_registry_to_claims(registry_path: str, run_dir: str) -> str:
+def run_registry_to_claims(
+    registry_path: str,
+    run_dir: str,
+    *,
+    claim_date: str | None = None,
+    payment_deadline: str | None = None,
+) -> str:
     """
     registry.xlsx -> claims.zip.
 
@@ -91,14 +97,23 @@ def run_registry_to_claims(registry_path: str, run_dir: str) -> str:
         registry_path=registry_path,
         template_path=str(DEFAULT_CLAIM_TEMPLATE),
         output_zip_path=str(output_zip_path),
-        claim_date=settings.claim_date or _default_claim_date(),
-        payment_deadline=settings.payment_deadline or _default_payment_deadline(),
+        claim_date=claim_date or settings.claim_date or _default_claim_date(),
+        payment_deadline=(
+            payment_deadline
+            or settings.payment_deadline
+            or _default_payment_deadline()
+        ),
         base_data_path=str(base_data) if base_data else None,
     )
     return str(output_zip_path)
 
 
-def run_registry_to_court_orders(registry_path: str, run_dir: str) -> str:
+def run_registry_to_court_orders(
+    registry_path: str,
+    run_dir: str,
+    *,
+    application_date: str | None = None,
+) -> str:
     """
     registry.xlsx -> court_orders.zip.
 
@@ -135,5 +150,6 @@ def run_registry_to_court_orders(registry_path: str, run_dir: str) -> str:
         base_data_path=str(base_data),
         jurisdiction_path=str(jurisdiction),
         output_zip_path=str(output_zip_path),
+        application_date=application_date,
     )
     return str(output_zip_path)

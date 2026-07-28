@@ -30,6 +30,7 @@ from app.pipeline import (
     run_registry_to_court_orders,
 )
 from app.shared.reference_files import install_validated_reference_file
+from app.shared.date_utils import format_date, parse_operator_date, parse_payment_deadline
 
 
 router = Router()
@@ -41,6 +42,9 @@ DEFAULT_COURT_ORDERS_JURISDICTION_PATH = PROJECT_ROOT / "storage" / "court_order
 
 
 class DocumentFlow(StatesGroup):
+    waiting_for_claim_date = State()
+    waiting_for_payment_deadline = State()
+    waiting_for_application_date = State()
     waiting_for_file = State()
 
 
@@ -58,6 +62,17 @@ ACTION_PROMPTS = {
         "Адрес, Период задолженности, Сумма долга."
     ),
 }
+
+CLAIM_DATE_PROMPT = (
+    "Введите дату претензии в формате ДД.ММ.ГГГГ или отправьте слово «сегодня»."
+)
+PAYMENT_DEADLINE_PROMPT = (
+    "Введите срок оплаты в формате ДД.ММ.ГГГГ. "
+    "Можно отправить «+30», чтобы добавить 30 дней к дате претензии."
+)
+APPLICATION_DATE_PROMPT = (
+    "Введите дату заявления в формате ДД.ММ.ГГГГ или отправьте слово «сегодня»."
+)
 
 
 HELP_TEXT = (
@@ -369,9 +384,60 @@ async def choose_action(callback: CallbackQuery, state: FSMContext) -> None:
     if action in REFERENCE_ACTIONS and await _deny_admin_callback_if_needed(callback):
         return
     await state.update_data(action=action)
-    await state.set_state(DocumentFlow.waiting_for_file)
-    await callback.message.answer(ACTION_PROMPTS[action])
+    if action == "claims":
+        await state.set_state(DocumentFlow.waiting_for_claim_date)
+        await callback.message.answer(CLAIM_DATE_PROMPT)
+    elif action == "court_orders":
+        await state.set_state(DocumentFlow.waiting_for_application_date)
+        await callback.message.answer(APPLICATION_DATE_PROMPT)
+    else:
+        await state.set_state(DocumentFlow.waiting_for_file)
+        await callback.message.answer(ACTION_PROMPTS[action])
     await _answer_callback_safely(callback)
+
+
+@router.message(DocumentFlow.waiting_for_claim_date)
+async def receive_claim_date(message: Message, state: FSMContext) -> None:
+    if await _deny_if_needed(message):
+        return
+    try:
+        claim_date = parse_operator_date(message.text)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(claim_date=format_date(claim_date))
+    await state.set_state(DocumentFlow.waiting_for_payment_deadline)
+    await message.answer(PAYMENT_DEADLINE_PROMPT)
+
+
+@router.message(DocumentFlow.waiting_for_payment_deadline)
+async def receive_payment_deadline(message: Message, state: FSMContext) -> None:
+    if await _deny_if_needed(message):
+        return
+    data = await state.get_data()
+    claim_date = parse_operator_date(data.get("claim_date"))
+    try:
+        deadline = parse_payment_deadline(message.text, claim_date=claim_date)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(payment_deadline=format_date(deadline))
+    await state.set_state(DocumentFlow.waiting_for_file)
+    await message.answer(ACTION_PROMPTS["claims"])
+
+
+@router.message(DocumentFlow.waiting_for_application_date)
+async def receive_application_date(message: Message, state: FSMContext) -> None:
+    if await _deny_if_needed(message):
+        return
+    try:
+        application_date = parse_operator_date(message.text)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(application_date=format_date(application_date))
+    await state.set_state(DocumentFlow.waiting_for_file)
+    await message.answer(ACTION_PROMPTS["court_orders"])
 
 
 @router.message(DocumentFlow.waiting_for_file, F.document)
@@ -454,14 +520,25 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
                 caption=caption,
             )
         elif action == "claims":
-            result_path = await asyncio.to_thread(run_registry_to_claims, str(input_path), str(run_dir))
+            result_path = await asyncio.to_thread(
+                run_registry_to_claims,
+                str(input_path),
+                str(run_dir),
+                claim_date=data.get("claim_date"),
+                payment_deadline=data.get("payment_deadline"),
+            )
             documents_count = await asyncio.to_thread(_zip_docx_count, result_path)
             await message.answer_document(
                 FSInputFile(result_path),
                 caption=f"Готово: claims.zip\nСоздано претензий: {documents_count}.",
             )
         elif action == "court_orders":
-            result_path = await asyncio.to_thread(run_registry_to_court_orders, str(input_path), str(run_dir))
+            result_path = await asyncio.to_thread(
+                run_registry_to_court_orders,
+                str(input_path),
+                str(run_dir),
+                application_date=data.get("application_date"),
+            )
             documents_count = await asyncio.to_thread(_zip_docx_count, result_path)
             await message.answer_document(
                 FSInputFile(result_path),
