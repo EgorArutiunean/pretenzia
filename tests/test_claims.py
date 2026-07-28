@@ -7,7 +7,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from docx import Document
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from app.modules.claims.generate_claims_from_registry import (
     generate_claims_zip_result,
@@ -218,6 +218,70 @@ class ClaimsGenerationTests(unittest.TestCase):
                     claim_date="01.03.2026",
                     payment_deadline="31.03.2026",
                 )
+
+    def test_generation_skips_bad_rows_and_writes_issue_sheets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            registry_path = temp / "registry.xlsx"
+            base_data_path = temp / "base.xlsx"
+            template_path = temp / "template.docx"
+            output_zip_path = temp / "claims.zip"
+
+            registry = Workbook()
+            worksheet = registry.active
+            worksheet.append(
+                [
+                    "Лицевой счет",
+                    "ФИО",
+                    "Адрес",
+                    "Период задолженности",
+                    "Сумма долга",
+                    "Компания",
+                ]
+            )
+            valid_row = [
+                "12970001",
+                "Иванов",
+                "Адрес",
+                "01.01.2026",
+                1000,
+                "ООО Тест",
+            ]
+            worksheet.append(valid_row)
+            worksheet.append(valid_row)
+            worksheet.append(["12970002", "Петров", "Адрес", "01.01.2026", 0, "ООО Тест"])
+            worksheet.append(["99990001", "Сидоров", "Адрес", "01.01.2026", 2000, "ООО Другое"])
+            worksheet.append(["плохой", "Орлов", "Адрес", "01.01.2026", 3000, "ООО Тест"])
+            registry.save(registry_path)
+
+            base = Workbook()
+            base_ws = base.active
+            base_ws.append(["Номер объекта", "Адрес", "Компания"])
+            base_ws.append(["1297", "Адрес", "ООО Тест"])
+            base.save(base_data_path)
+            _build_template(template_path)
+
+            result = generate_claims_zip_result(
+                registry_path=str(registry_path),
+                template_path=str(template_path),
+                output_zip_path=str(output_zip_path),
+                claim_date="01.03.2026",
+                payment_deadline="31.03.2026",
+                base_data_path=str(base_data_path),
+            )
+
+            with ZipFile(output_zip_path) as archive:
+                names = archive.namelist()
+                archive.extract("errors.xlsx", temp)
+            issues = load_workbook(temp / "errors.xlsx", data_only=True)
+
+        self.assertEqual(result.documents_count, 1)
+        self.assertEqual(result.errors_count, 2)
+        self.assertIn("errors.xlsx", names)
+        self.assertEqual(
+            set(issues.sheetnames),
+            {"Ошибки", "Добросовестные плательщики", "Дубли"},
+        )
 
 
 if __name__ == "__main__":

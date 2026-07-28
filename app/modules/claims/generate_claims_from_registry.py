@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill
 
 from app.shared.file_utils import safe_filename
 from app.shared.money_to_words import money_to_words
@@ -72,6 +73,19 @@ class ClaimsGenerationResult:
     zip_path: str
     documents_count: int
     total_amount: Decimal
+    skipped_count: int = 0
+    errors_count: int = 0
+
+
+@dataclass(frozen=True)
+class ClaimIssue:
+    category: str
+    source_row: int
+    account_number: str
+    debtor_name: str
+    company: str
+    debt_amount: Decimal | None
+    reason: str
 
 
 def parse_money(value: Any) -> Decimal:
@@ -108,7 +122,12 @@ def normalize_header(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
-def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> list[ClaimRow]:
+def read_registry(
+    registry_path: str | Path,
+    sheet_name: str | None = None,
+    *,
+    issues: list[ClaimIssue] | None = None,
+) -> list[ClaimRow]:
     path = Path(registry_path)
     if not path.exists():
         raise FileNotFoundError(f"Excel-реестр не найден: {path}")
@@ -163,8 +182,36 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
         if all(value in (None, "") for value in raw_values.values()):
             continue
 
-        amount = parse_money(raw_values["Сумма долга"])
+        try:
+            amount = parse_money(raw_values["Сумма долга"])
+        except ValueError as exc:
+            if issues is None:
+                raise
+            issues.append(
+                ClaimIssue(
+                    category="error",
+                    source_row=row_idx,
+                    account_number=str(raw_values["Лицевой счет"] or "").strip(),
+                    debtor_name=str(raw_values["ФИО"] or "").strip(),
+                    company=str(raw_values.get("Компания") or "").strip(),
+                    debt_amount=None,
+                    reason=str(exc),
+                )
+            )
+            continue
         if amount <= 0:
+            if issues is not None:
+                issues.append(
+                    ClaimIssue(
+                        category="good_payer",
+                        source_row=row_idx,
+                        account_number=str(raw_values["Лицевой счет"] or "").strip(),
+                        debtor_name=str(raw_values["ФИО"] or "").strip(),
+                        company=str(raw_values.get("Компания") or "").strip(),
+                        debt_amount=amount,
+                        reason="Задолженность меньше или равна нулю.",
+                    )
+                )
             continue
 
         account_number = str(raw_values["Лицевой счет"] or "").strip()
@@ -172,9 +219,21 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
         address = str(raw_values["Адрес"] or "").strip()
         debt_period = str(raw_values["Период задолженности"] or "").strip()
         if not re.fullmatch(r"\d{8}", account_number):
-            raise ValueError(
-                f"Строка {row_idx}: лицевой счёт должен состоять ровно из 8 цифр."
+            reason = f"Строка {row_idx}: лицевой счёт должен состоять ровно из 8 цифр."
+            if issues is None:
+                raise ValueError(reason)
+            issues.append(
+                ClaimIssue(
+                    category="error",
+                    source_row=row_idx,
+                    account_number=account_number,
+                    debtor_name=debtor_name,
+                    company=str(raw_values.get("Компания") or "").strip(),
+                    debt_amount=amount,
+                    reason=reason,
+                )
             )
+            continue
         missing = [
             label
             for label, value in (
@@ -185,10 +244,24 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
             if not value
         ]
         if missing:
-            raise ValueError(
+            reason = (
                 f"Строка {row_idx}: не заполнены обязательные поля: "
                 + ", ".join(missing)
             )
+            if issues is None:
+                raise ValueError(reason)
+            issues.append(
+                ClaimIssue(
+                    category="error",
+                    source_row=row_idx,
+                    account_number=account_number,
+                    debtor_name=debtor_name,
+                    company=str(raw_values.get("Компания") or "").strip(),
+                    debt_amount=amount,
+                    reason=reason,
+                )
+            )
+            continue
 
         candidate = ClaimRow(
             account_number=account_number,
@@ -201,8 +274,21 @@ def read_registry(registry_path: str | Path, sheet_name: str | None = None) -> l
             company_code=str(raw_values.get("Код компании") or "").strip(),
             source_row=row_idx,
         )
-        if candidate not in rows:
-            rows.append(candidate)
+        if candidate in rows:
+            if issues is not None:
+                issues.append(
+                    ClaimIssue(
+                        category="duplicate",
+                        source_row=row_idx,
+                        account_number=account_number,
+                        debtor_name=debtor_name,
+                        company=candidate.company,
+                        debt_amount=amount,
+                        reason="Полностью одинаковая строка уже была обработана.",
+                    )
+                )
+            continue
+        rows.append(candidate)
 
     return rows
 
@@ -309,6 +395,52 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _write_claim_issues(issues: list[ClaimIssue], output_path: Path) -> Path:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    headers = [
+        "Строка реестра",
+        "Лицевой счет",
+        "ФИО",
+        "Компания",
+        "Сумма долга",
+        "Причина",
+    ]
+    sheet_names = {
+        "error": "Ошибки",
+        "good_payer": "Добросовестные плательщики",
+        "duplicate": "Дубли",
+    }
+    for category, sheet_name in sheet_names.items():
+        category_issues = [issue for issue in issues if issue.category == category]
+        if not category_issues:
+            continue
+        worksheet = workbook.create_sheet(sheet_name)
+        worksheet.append(headers)
+        for issue in category_issues:
+            worksheet.append(
+                [
+                    issue.source_row,
+                    issue.account_number,
+                    issue.debtor_name,
+                    issue.company,
+                    issue.debt_amount,
+                    issue.reason,
+                ]
+            )
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = f"A1:F{worksheet.max_row}"
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1F4E78")
+        for col_idx, width in enumerate((16, 18, 32, 32, 18, 70), start=1):
+            worksheet.column_dimensions[chr(64 + col_idx)].width = width
+        for cell in worksheet["E"][1:]:
+            cell.number_format = "#,##0.00"
+    workbook.save(output_path)
+    return output_path
+
+
 def generate_claims_zip_result(
     registry_path: str,
     template_path: str,
@@ -325,8 +457,9 @@ def generate_claims_zip_result(
     if not template.exists():
         raise FileNotFoundError(f"Word-шаблон претензии не найден: {template}")
 
-    rows = read_registry(registry)
-    if not rows:
+    issues: list[ClaimIssue] = []
+    rows = read_registry(registry, issues=issues)
+    if not rows and not issues:
         raise ValueError("В реестре нет строк с положительной суммой долга для генерации претензий.")
     object_data_by_code = load_object_data(base_data_path) if base_data_path else {}
 
@@ -343,23 +476,53 @@ def generate_claims_zip_result(
             object_code = row.account_number[:4]
             object_data = object_data_by_code.get(object_code)
             if object_data_by_code and object_data is None:
-                raise ValueError(
-                    f"Для лицевого счёта {row.account_number} код объекта "
-                    f"{object_code} отсутствует в основной БЗ."
+                issues.append(
+                    ClaimIssue(
+                        category="error",
+                        source_row=row.source_row,
+                        account_number=row.account_number,
+                        debtor_name=row.debtor_name,
+                        company=row.company,
+                        debt_amount=row.debt_amount,
+                        reason=f"Код объекта {object_code} отсутствует в основной БЗ.",
+                    )
                 )
+                continue
             if object_data is not None and row.company:
                 if normalize_header(object_data.company) != normalize_header(row.company):
-                    raise ValueError(
-                        f"Для лицевого счёта {row.account_number} компания в реестре "
-                        "не совпадает с основной БЗ."
+                    issues.append(
+                        ClaimIssue(
+                            category="error",
+                            source_row=row.source_row,
+                            account_number=row.account_number,
+                            debtor_name=row.debtor_name,
+                            company=row.company,
+                            debt_amount=row.debt_amount,
+                            reason="Компания в реестре не совпадает с основной БЗ.",
+                        )
                     )
+                    continue
 
-            doc = Document(str(template))
-            _replace_in_doc(
-                doc,
-                build_replacements(row, claim_date, payment_deadline, object_data),
-            )
-            _remove_deprecated_claim_elements(doc)
+            try:
+                doc = Document(str(template))
+                _replace_in_doc(
+                    doc,
+                    build_replacements(row, claim_date, payment_deadline, object_data),
+                )
+                _remove_deprecated_claim_elements(doc)
+            except Exception:
+                issues.append(
+                    ClaimIssue(
+                        category="error",
+                        source_row=row.source_row,
+                        account_number=row.account_number,
+                        debtor_name=row.debtor_name,
+                        company=row.company,
+                        debt_amount=row.debt_amount,
+                        reason="Не удалось сформировать Word-документ.",
+                    )
+                )
+                continue
 
             base_name = safe_filename(f"{index:03d}_{row.account_number}_{row.debtor_name}")
             file_name = base_name + ".docx"
@@ -382,14 +545,31 @@ def generate_claims_zip_result(
             doc.save(file_path)
             generated_files.append(file_path)
 
+        if issues:
+            generated_files.append(
+                _write_claim_issues(issues, temp_dir / "errors.xlsx")
+            )
         create_zip(generated_files, output_zip, base_dir=temp_dir)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     return ClaimsGenerationResult(
         zip_path=str(output_zip),
-        documents_count=len(rows),
-        total_amount=sum((row.debt_amount for row in rows), Decimal("0.00")).quantize(Decimal("0.01")),
+        documents_count=sum(path.suffix.lower() == ".docx" for path in generated_files),
+        total_amount=sum(
+            (
+                row.debt_amount
+                for row in rows
+                if not any(
+                    issue.category == "error"
+                    and issue.source_row == row.source_row
+                    for issue in issues
+                )
+            ),
+            Decimal("0.00"),
+        ).quantize(Decimal("0.01")),
+        skipped_count=len(issues),
+        errors_count=sum(issue.category == "error" for issue in issues),
     )
 
 

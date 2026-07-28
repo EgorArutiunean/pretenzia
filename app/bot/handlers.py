@@ -237,6 +237,11 @@ def _zip_docx_count(zip_path: str) -> int:
         return sum(name.lower().endswith(".docx") for name in archive.namelist())
 
 
+def _zip_contains(zip_path: str, file_name: str) -> bool:
+    with ZipFile(zip_path) as archive:
+        return file_name in archive.namelist()
+
+
 def _install_object_addresses(upload_path: Path) -> Path:
     target_path = _object_addresses_path()
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -528,9 +533,17 @@ async def receive_document(message: Message, bot: Bot, state: FSMContext) -> Non
                 payment_deadline=data.get("payment_deadline"),
             )
             documents_count = await asyncio.to_thread(_zip_docx_count, result_path)
+            has_issues = await asyncio.to_thread(
+                _zip_contains,
+                result_path,
+                "errors.xlsx",
+            )
+            caption = f"Готово: claims.zip\nСоздано претензий: {documents_count}."
+            if has_issues:
+                caption += "\nПроверьте errors.xlsx внутри архива."
             await message.answer_document(
                 FSInputFile(result_path),
-                caption=f"Готово: claims.zip\nСоздано претензий: {documents_count}.",
+                caption=caption,
             )
         elif action == "court_orders":
             result_path = await asyncio.to_thread(
