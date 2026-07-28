@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Pt
+from docx.text.run import Run
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
@@ -39,6 +43,9 @@ REQUIRED_JURISDICTION_COLUMNS = [
     "Номер объекта",
     "Подсудность",
 ]
+
+COURT_ORDER_FONT_NAME = "Times New Roman"
+COURT_ORDER_FONT_SIZE_PT = 12
 
 COLUMN_ALIASES = {
     "номер объекта": "Номер объекта",
@@ -265,6 +272,38 @@ def _replace_in_doc(doc: Document, replacements: dict[str, str]) -> None:
                     for cell in row.cells:
                         for paragraph in cell.paragraphs:
                             _replace_text_in_paragraph(paragraph, replacements)
+
+
+def _normalize_document_font(
+    doc: Document,
+    *,
+    font_name: str = COURT_ORDER_FONT_NAME,
+    font_size_pt: int = COURT_ORDER_FONT_SIZE_PT,
+) -> None:
+    roots = [doc.element]
+    for section in doc.sections:
+        roots.extend((section.header._element, section.footer._element))
+
+    seen_roots: set[int] = set()
+    for root in roots:
+        root_id = id(root)
+        if root_id in seen_roots:
+            continue
+        seen_roots.add(root_id)
+
+        for run_element in root.iter(qn("w:r")):
+            run = Run(run_element, None)
+            run.font.name = font_name
+            run.font.size = Pt(font_size_pt)
+            run_properties = run_element.get_or_add_rPr()
+            run_fonts = run_properties.get_or_add_rFonts()
+            for attribute in ("ascii", "hAnsi", "eastAsia", "cs"):
+                run_fonts.set(qn(f"w:{attribute}"), font_name)
+            complex_size = run_properties.find(qn("w:szCs"))
+            if complex_size is None:
+                complex_size = OxmlElement("w:szCs")
+                run_properties.append(complex_size)
+            complex_size.set(qn("w:val"), str(font_size_pt * 2))
 
 
 def _read_header_map(
@@ -940,6 +979,7 @@ def generate_court_orders_zip_result(
                     debtor_data,
                 ),
             )
+            _normalize_document_font(doc)
 
             base_name = safe_filename(f"{index:03d}_{row.account_number}_{row.debtor_name}_судебный_приказ")
             file_name = base_name + ".docx"

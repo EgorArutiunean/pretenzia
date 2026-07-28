@@ -7,6 +7,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from docx import Document
+from docx.oxml.ns import qn
 from openpyxl import Workbook, load_workbook
 
 from app.modules.court_orders.generate_court_orders_from_registry import (
@@ -144,6 +145,28 @@ class CourtOrdersGenerationTests(unittest.TestCase):
         self.assertIn("ООО \"ТЕСТ\"", generated_text)
         self.assertIn("9 500,00", generated_text)
         self.assertNotRegex(generated_text, r" {2,}")
+        generated_runs = [
+            run
+            for paragraph in generated_doc.paragraphs
+            for run in paragraph.runs
+            if run.text.strip()
+        ]
+        self.assertTrue(generated_runs)
+        self.assertTrue(
+            all(run.font.name == "Times New Roman" for run in generated_runs)
+        )
+        self.assertTrue(
+            all(run.font.size and run.font.size.pt == 12 for run in generated_runs)
+        )
+        self.assertTrue(
+            all(
+                run._element.get_or_add_rPr()
+                .find(qn("w:szCs"))
+                .get(qn("w:val"))
+                == "24"
+                for run in generated_runs
+            )
+        )
 
     def test_separate_base_and_jurisdiction_files_are_joined_by_object(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
