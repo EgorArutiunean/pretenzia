@@ -108,8 +108,8 @@ class CourtOrdersGenerationTests(unittest.TestCase):
         )
 
     def test_court_order_amount_boundaries_are_inclusive(self) -> None:
-        self.assertIsNotNone(court_order_exclusion_reason(4, Decimal("4999")))
-        self.assertIsNone(court_order_exclusion_reason(5, Decimal("5000")))
+        self.assertIsNotNone(court_order_exclusion_reason(6, Decimal("6999.99")))
+        self.assertIsNone(court_order_exclusion_reason(7, Decimal("7000")))
         self.assertIsNone(court_order_exclusion_reason(500, Decimal("500000")))
         self.assertIsNotNone(court_order_exclusion_reason(501, Decimal("500001")))
 

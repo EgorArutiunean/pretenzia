@@ -47,6 +47,7 @@ REQUIRED_JURISDICTION_COLUMNS = [
 COURT_ORDER_FONT_NAME = "Times New Roman"
 COURT_ORDER_FONT_SIZE_PT = 12
 LIMITATION_PERIOD_MONTHS = 36
+MIN_COURT_ORDER_AMOUNT = Decimal("7000")
 
 COLUMN_ALIASES = {
     "номер объекта": "Номер объекта",
@@ -576,8 +577,8 @@ def calculate_court_period(period_text: str, full_months: int) -> str:
 def court_order_exclusion_reason(full_months: int, court_debt: Decimal) -> str | None:
     if full_months == 0:
         return "Задолженность меньше одной месячной ставки."
-    if court_debt < Decimal("5000"):
-        return "Сумма для судебного приказа менее 5 000 рублей."
+    if court_debt < MIN_COURT_ORDER_AMOUNT:
+        return "Сумма для судебного приказа менее 7 000 рублей."
     if court_debt > Decimal("500000"):
         return "Сумма превышает предел приказного производства — 500 000 рублей."
     return None
