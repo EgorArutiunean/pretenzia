@@ -579,8 +579,6 @@ def court_order_exclusion_reason(full_months: int, court_debt: Decimal) -> str |
         return "Задолженность меньше одной месячной ставки."
     if court_debt < MIN_COURT_ORDER_AMOUNT:
         return "Сумма для судебного приказа менее 7 000 рублей."
-    if court_debt > Decimal("500000"):
-        return "Сумма превышает предел приказного производства — 500 000 рублей."
     return None
 
 

@@ -111,7 +111,8 @@ class CourtOrdersGenerationTests(unittest.TestCase):
         self.assertIsNotNone(court_order_exclusion_reason(6, Decimal("6999.99")))
         self.assertIsNone(court_order_exclusion_reason(7, Decimal("7000")))
         self.assertIsNone(court_order_exclusion_reason(500, Decimal("500000")))
-        self.assertIsNotNone(court_order_exclusion_reason(501, Decimal("500001")))
+        self.assertIsNone(court_order_exclusion_reason(501, Decimal("500001")))
+        self.assertIsNone(court_order_exclusion_reason(36, Decimal("1000000")))
 
     def test_generate_court_orders_zip_result_creates_docx_for_known_objects(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
